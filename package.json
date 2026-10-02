@@ -1,7 +1,7 @@
 {
   "name": "interface",
   "productName": "Interface",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "One room where you, Claude Code and Codex work together on a local folder",
   "homepage": "https://github.com/Masudali23/interface-agent-desktop",
   "desktopName": "interface.desktop",

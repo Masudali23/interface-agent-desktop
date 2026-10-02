@@ -6,10 +6,9 @@ export function basename(path: string): string {
 }
 
 export function relative(path: string, root: string): string {
-  if (path.startsWith(root)) {
-    const rest = path.slice(root.length).replace(/^[\\/]/, '')
-    return rest || basename(path)
-  }
+  const base = root.replace(/[\\/]+$/, '')
+  if (path === base) return basename(path)
+  if (path.startsWith(base + '/') || path.startsWith(base + '\\')) return path.slice(base.length + 1)
   return path
 }
 

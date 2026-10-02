@@ -12,7 +12,7 @@ function Code({ line, path }: { line?: DiffLine; path: string }) {
   return html ? <code dangerouslySetInnerHTML={{ __html: html }} /> : <code>{line?.text || ' '}</code>
 }
 
-export function DiffViewer({ diff, path, mode = 'unified' }: { diff: string; path?: string; mode?: 'unified' | 'split' }) {
+export function DiffViewer({ diff, path, oldPath, mode = 'unified' }: { diff: string; path?: string; oldPath?: string; mode?: 'unified' | 'split' }) {
   const files = useMemo(() => parseUnifiedDiff(diff, path), [diff, path])
   const [expanded, setExpanded] = useState(false)
   if (!files.length) return <div className="panel-note">No text changes in this patch.</div>
@@ -20,15 +20,17 @@ export function DiffViewer({ diff, path, mode = 'unified' }: { diff: string; pat
     <div className={`review-diff ${mode}`}>
       {files.map((file, fileIndex) => {
         let shown = 0
+        const caption = files.length === 1 && path ? path : file.path
+        const previous = files.length === 1 && oldPath ? oldPath : file.oldPath !== file.path ? file.oldPath : undefined
         const total = file.hunks.reduce((n, hunk) => n + hunk.lines.length, 0)
         return (
           <section key={`${file.path}-${fileIndex}`} className="review-diff-file">
             <div className="review-file-caption">
-              <span>{file.oldPath && file.oldPath !== file.path ? `${file.oldPath} → ` : ''}{file.path}</span>
+              <span>{previous && previous !== caption ? `${previous} → ` : ''}{caption}</span>
               <span className="change-stat"><span className="add">+{file.added}</span> <span className="del">−{file.removed}</span></span>
             </div>
             {file.binary ? <div className="panel-note">Binary file changed. Open the file to view its contents.</div> : null}
-            {!file.hunks.length && !file.binary && <div className="panel-note">{file.metadata.join('\n') || `File ${file.status}; no content changes.`}</div>}
+            {!file.hunks.length && !file.binary && <div className="panel-note">{file.metadata.filter((line) => !/^={3,}$|^Index: /.test(line)).join('\n') || `File ${file.status}; no content changes.`}</div>}
             {mode === 'split' && file.hunks.length > 0 && <div className="review-split-labels"><span>Before · removed</span><span>After · added</span></div>}
             {file.hunks.map((hunk, index) => {
               const lines = expanded ? hunk.lines : hunk.lines.slice(0, Math.max(0, 2000 - shown))

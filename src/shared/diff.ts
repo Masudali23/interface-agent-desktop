@@ -68,6 +68,7 @@ export function parseUnifiedDiff(patch: string, fallbackPath = 'Changes'): DiffF
   let oldRemaining = 0
   let newRemaining = 0
   let gitPaths = false
+  let literalPaths = false
   let oldHeader: string | undefined
   const makeFile = (path: string): DiffFile => ({ path, status: 'modified', binary: false, added: 0, removed: 0, metadata: [], hunks: [] })
   for (const line of patch.replace(/\n$/, '').split('\n')) {
@@ -78,6 +79,7 @@ export function parseUnifiedDiff(patch: string, fallbackPath = 'Changes'): DiffF
       files.push(file)
       hunk = undefined
       gitPaths = true
+      literalPaths = false
       oldHeader = undefined
       continue
     }
@@ -110,7 +112,7 @@ export function parseUnifiedDiff(patch: string, fallbackPath = 'Changes'): DiffF
       else file.oldPath = path
     } else if (line.startsWith('+++ ')) {
       const newHeader = headerPath(line.slice(4))
-      const prefixed = gitPaths || ((oldHeader?.startsWith('a/') || oldHeader === '/dev/null') && (newHeader.startsWith('b/') || newHeader === '/dev/null'))
+      const prefixed = gitPaths || (!literalPaths && (oldHeader?.startsWith('a/') || oldHeader === '/dev/null') && (newHeader.startsWith('b/') || newHeader === '/dev/null'))
       const path = prefixed ? newHeader.replace(/^[ab]\//, '') : newHeader
       if (oldHeader && oldHeader !== '/dev/null') file.oldPath = prefixed ? oldHeader.replace(/^[ab]\//, '') : oldHeader
       if (path === '/dev/null') { file.status = 'deleted'; file.path = file.oldPath ?? fallbackPath }
@@ -120,6 +122,8 @@ export function parseUnifiedDiff(patch: string, fallbackPath = 'Changes'): DiffF
     else if (line.startsWith('new file mode ')) file.status = 'added'
     else if (line.startsWith('deleted file mode ')) file.status = 'deleted'
     else if (line) {
+      // jsdiff's file separator precedes literal filenames, including a/ or b/.
+      if (/^={3,}$/.test(line)) literalPaths = true
       if (/^(Binary files |GIT binary patch)/.test(line)) file.binary = true
       file.metadata.push(line)
     }

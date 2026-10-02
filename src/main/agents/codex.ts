@@ -492,7 +492,7 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
         }
         return
       case 'fileChange': {
-        const changes = (item.changes ?? []).map((c: Json) => ({ path: c.path, kind: c.kind?.type ?? 'update', diff: c.diff }))
+        const changes = (item.changes ?? []).map((c: Json) => ({ path: c.path, kind: c.kind?.type ?? 'update', move_path: c.kind?.move_path, diff: c.diff }))
         this.startTool(id, 'Edit files', { changes }, first)
         if (done) {
           const failed = item.status === 'failed' || item.status === 'declined'
@@ -558,7 +558,7 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
       case 'item/fileChange/requestApproval':
         toolName = 'file change'
         input = {
-          changes: (item?.changes ?? []).map((c: Json) => ({ path: c.path, kind: c.kind?.type ?? 'update', diff: c.diff })),
+          changes: (item?.changes ?? []).map((c: Json) => ({ path: c.path, kind: c.kind?.type ?? 'update', move_path: c.kind?.move_path, diff: c.diff })),
           reason: p.reason
         }
         break

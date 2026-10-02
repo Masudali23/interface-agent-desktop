@@ -49,6 +49,7 @@ interface Job {
   retried?: boolean
   overrides?: TurnOverrides
   canceled?: boolean
+  started?: boolean
   sourceMessageId?: string
   /** Send exactly this instead of the room update (retry, slash commands). */
   raw?: { text: string; attachments: Attachment[] }
@@ -371,6 +372,41 @@ export class RoomManager {
     return message
   }
 
+  /** Context available to a user-triggered turn or the handoff's own queued job. */
+  private pendingInput(room: Room, memberId: string, sourceMessageId?: string): Message[] {
+    // Keep separately queued handoffs out of unrelated turns. Unrelayed requests
+    // and history replay remain available; handoffDone also describes old deliveries.
+    const rt = this.runtime(room.id)
+    const reserved = new Set((rt.queue.get(memberId) ?? []).flatMap((job) => job.sourceMessageId ? [job.sourceMessageId] : []))
+    // A completed reply can still be taking its final snapshot before enqueuing its relay.
+    for (const message of rt.current.values()) {
+      if (message.status !== 'streaming' && message.handoff?.to === memberId && message.handoffDone) reserved.add(message.id)
+    }
+    return pendingFor(memberId, room.messages).filter((m) =>
+      !(m.handoff?.to === memberId && reserved.has(m.id) && m.id !== sourceMessageId))
+  }
+
+  private completeDelivery(room: Room, memberId: string, pending: Message[]): void {
+    for (const message of pending) {
+      if (message.handoff?.to !== memberId || message.handoffDone) continue
+      message.handoffDone = true
+      this.emitMessage(room.id, message, true)
+    }
+    this.store.saveSoon(room.id)
+  }
+
+  private releaseInput(room: Room, memberId: string, messageIds: string[]): void {
+    for (const message of room.messages) {
+      if (!messageIds.includes(message.id)) continue
+      message.deliveredTo = (message.deliveredTo ?? []).filter((id) => id !== memberId)
+      if (message.handoff?.to === memberId) {
+        message.handoffDone = false
+        this.emitMessage(room.id, message, true)
+      }
+    }
+    this.store.saveSoon(room.id)
+  }
+
   /** Gives a user message to an agent mid-turn instead of waiting for the turn to end. */
   private steer(room: Room, memberId: string): boolean {
     const rt = this.runtime(room.id)
@@ -378,7 +414,7 @@ export class RoomManager {
     const member = room.members.find((m) => m.id === memberId)
     const c = rt.connectors.get(memberId)
     if (!current || !member || !c?.steer || current.status !== 'streaming') return false
-    const pending = pendingFor(memberId, room.messages).filter((m) => m.handoff?.to !== memberId)
+    const pending = this.pendingInput(room, memberId)
     if (!pending.length) return false
     const text = formatUpdate(member, pending, room, false)
     const attachments = pending.filter((m) => m.author === 'user' && (m.to ?? []).includes(memberId)).flatMap((m) => m.attachments ?? [])
@@ -386,6 +422,7 @@ export class RoomManager {
     for (const m of pending) m.deliveredTo = [...(m.deliveredTo ?? []), memberId]
     void c.steer({ text, images: attachments }).catch(() => false).then((ok) => {
       if (ok) {
+        this.completeDelivery(room, memberId, pending)
         current.prompt = { text: `${current.prompt?.text ?? ''}\n\n${text}`, attachments: [...(current.prompt?.attachments ?? []), ...attachments] }
         current.inputMessageIds = [...new Set([...(current.inputMessageIds ?? []), ...pending.map((m) => m.id)])]
         this.store.saveSoon(room.id)
@@ -510,8 +547,9 @@ export class RoomManager {
     const rt = this.runtime(room.id)
     const member = room.members.find((m) => m.id === memberId)
     if (!member) return
-    const pending = job.raw || job.command ? [] : pendingFor(memberId, room.messages).filter((m) => m.handoff?.to !== memberId || m.id === job.sourceMessageId)
+    const pending = job.raw || job.command ? [] : this.pendingInput(room, memberId, job.sourceMessageId)
     if (!job.raw && !job.command && !pending.length) return this.pump(room, memberId)
+    job.started = false
 
     const firstTurn = !room.sessions[memberId]
     const execRules = member.provider === 'codex' && !this.host.codexAppServer() && firstTurn
@@ -573,7 +611,9 @@ export class RoomManager {
       const invalid = this.validateOverrides(room, memberId, job.overrides)
       if (invalid) { this.finishTurn(room, memberId, { t: 'turn-end', ok: false, error: invalid }); return }
       message.execution = { model: job.overrides?.model ?? member.settings.model, effort: job.overrides?.effort ?? member.settings.effort, delegated: !!job.overrides }
+      job.started = true
       if (job.command && c.command?.(job.command.name, job.command.args)) return
+      this.completeDelivery(room, memberId, pending)
       c.send({ text: prompt.text, images: prompt.attachments, overrides: job.overrides })
     }
     // Snapshots capture shell edits for both providers. A shared folder can include
@@ -756,6 +796,7 @@ export class RoomManager {
     const job = rt.jobs.get(memberId)
     if (!message || !member) { rt.current.delete(memberId); rt.jobs.delete(memberId); return this.pump(room, memberId) }
     if (message.status !== 'streaming') return
+    if (job && !job.started) this.releaseInput(room, memberId, message.inputMessageIds ?? [])
 
     for (const b of message.blocks) {
       if (b.kind === 'tool' && b.status === 'running') b.status = e.ok ? 'done' : 'error'
@@ -824,6 +865,7 @@ export class RoomManager {
     const rt = this.runtime(roomId)
     for (const m of room?.members ?? []) {
       if (memberId && m.id !== memberId) continue
+      if (room) this.releaseInput(room, m.id, (rt.queue.get(m.id) ?? []).flatMap((job) => job.sourceMessageId ? [job.sourceMessageId] : []))
       rt.queue.set(m.id, [])
       const job = rt.jobs.get(m.id)
       if (job) job.canceled = true

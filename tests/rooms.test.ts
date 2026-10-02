@@ -422,6 +422,131 @@ describe('RoomManager delegated turns', () => {
   })
 })
 
+describe('RoomManager unrelayed handoffs', () => {
+  it.each<[string, Partial<Room>]>([
+    ['automatic relay disabled', { autoRelay: false }],
+    ['recipient unticked', { active: ['a'] }],
+    ['hop limit reached', { maxHops: 0 }]
+  ])('delivers the original request when the user addresses its recipient: %s', async (_label, settings) => {
+    const { manager, room, send, replies } = setup(settings)
+    send('Plan the work')
+    await settle()
+    complete(mocks.connectors[0], 'Plan ready\n→ @gpt: Implement worker.ts with retries')
+    await settle()
+    const handoff = replies('a')[0]
+    expect(handoff.handoffDone).not.toBe(true)
+    send('Please do what Claude asked', ['b'])
+    await settle()
+    const worker = mocks.connectors[1]
+    expect(worker.send.mock.calls[0][0].text).toContain('Implement worker.ts with retries')
+    expect(handoff.handoffDone).toBe(true)
+    expect(handoff.deliveredTo).toContain('b')
+    manager.continueHandoff(room.id, handoff.id)
+    complete(worker)
+    await settle()
+    expect(worker.send).toHaveBeenCalledOnce()
+  })
+
+  it('includes unrelayed requests when steering a running recipient', async () => {
+    const { send, replies, host } = setup({ autoRelay: false })
+    send('Inspect the project', ['a', 'b'])
+    await settle()
+    const [lead, worker] = mocks.connectors
+    worker.steer.mockResolvedValue(true)
+    complete(lead, 'Plan ready\n→ @gpt: Implement worker.ts with retries')
+    await settle()
+    send('Also do what Claude asked', ['b'])
+    await settle()
+    expect(worker.steer.mock.calls[0][0].text).toContain('Implement worker.ts with retries')
+    expect(replies('a')[0].handoffDone).toBe(true)
+    expect(host.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', message: expect.objectContaining({ id: replies('a')[0].id, handoffDone: true }) }))
+  })
+
+  it('leaves an unrelayed request available after a rejected steer, then delivers it next turn', async () => {
+    const { send, replies } = setup({ autoRelay: false })
+    send('Inspect the project', ['a', 'b'])
+    await settle()
+    const [lead, worker] = mocks.connectors
+    complete(lead, 'Plan ready\n→ @gpt: Implement worker.ts with retries')
+    await settle()
+    send('Also do what Claude asked', ['b'])
+    await settle()
+    expect(replies('a')[0].handoffDone).not.toBe(true)
+    expect(replies('a')[0].deliveredTo).not.toContain('b')
+    complete(worker)
+    await settle()
+    expect(worker.send.mock.calls[1][0].text).toContain('Implement worker.ts with retries')
+    expect(replies('a')[0].handoffDone).toBe(true)
+  })
+
+  it('releases a cancelled queued handoff so a later user message can deliver it', async () => {
+    const { manager, room, send, replies } = setup()
+    send('Inspect the project', ['a', 'b'])
+    await settle()
+    const [lead, worker] = mocks.connectors
+    complete(lead, 'Plan ready\n→ @gpt: Implement worker.ts with retries')
+    await settle()
+    expect(replies('a')[0].handoffDone).toBe(true)
+    manager.stop(room.id, 'b')
+    await settle()
+    expect(replies('a')[0].handoffDone).toBe(false)
+    send('Now do what Claude asked', ['b'])
+    await settle()
+    expect(worker.send.mock.calls[1][0].text).toContain('Implement worker.ts with retries')
+    expect(replies('a')[0].handoffDone).toBe(true)
+  })
+
+  it('releases input when stopped before the initial snapshot allows delivery', async () => {
+    const { manager, room, send, replies } = setup({ autoRelay: false })
+    send('Plan the work')
+    await settle()
+    complete(mocks.connectors[0], 'Plan ready\n→ @gpt: Implement worker.ts with retries')
+    await settle()
+    const initial = deferred<string>()
+    vi.mocked(snapshot).mockReturnValueOnce(initial.promise)
+    send('Do what Claude asked', ['b'])
+    manager.stop(room.id, 'b')
+    await settle()
+    initial.resolve('baseline')
+    await settle()
+    const handoff = replies('a')[0]
+    expect(handoff.handoffDone).not.toBe(true)
+    expect(handoff.deliveredTo).not.toContain('b')
+    expect(mocks.connectors[1].send).not.toHaveBeenCalled()
+    send('Continue with Claude’s request', ['b'])
+    await settle()
+    expect(mocks.connectors[1].send.mock.calls[0][0].text).toContain('Implement worker.ts with retries')
+    expect(handoff.handoffDone).toBe(true)
+  })
+
+  it('replays a previously delivered request when the provider session must be restarted', async () => {
+    const { send, replies } = setup({ autoRelay: false })
+    send('Plan the work')
+    await settle()
+    complete(mocks.connectors[0], 'Plan ready\n→ @gpt: Implement worker.ts with retries')
+    await settle()
+    send('Do what Claude asked', ['b'])
+    await settle()
+    expect(replies('a')[0].handoffDone).toBe(true)
+    mocks.connectors[1].report({ t: 'session-invalid' })
+    await settle()
+    expect(mocks.connectors[2].send.mock.calls[0][0].text).toContain('Implement worker.ts with retries')
+  })
+
+  it('relays bracket labels as task text instead of invalid settings', async () => {
+    const { send, replies } = setup()
+    send('Plan the work')
+    await settle()
+    complete(mocks.connectors[0], 'Plan ready\n→ @gpt [urgent]: Implement worker.ts')
+    await settle()
+    const handoff = replies('a')[0]
+    expect(handoff.handoff?.error).toBeUndefined()
+    expect(handoff.handoff?.text).toBe('[urgent]: Implement worker.ts')
+    expect(mocks.connectors[1]?.send.mock.calls[0][0].text).toContain('[urgent]: Implement worker.ts')
+    expect(handoff.handoffDone).toBe(true)
+  })
+})
+
 describe('RoomManager shared file undo', () => {
   beforeEach(() => {
     let number = 0

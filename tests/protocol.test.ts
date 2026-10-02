@@ -74,6 +74,34 @@ describe('parseHandoff', () => {
     })
   })
 
+  it.each([
+    '[urgent] Review api.ts',
+    '[urgent]: Review api.ts',
+    '[docs](https://example.com/api): Review these docs'
+  ])('preserves ordinary bracketed handoff text: %s', (task) => {
+    expect(parseHandoff(`API ready\n→ @gpt ${task}`, team, 'a')).toEqual({
+      body: 'API ready', handoff: { to: 'b', text: task }
+    })
+  })
+
+  it('keeps settings-looking task text after the handoff colon as text', () => {
+    expect(parseHandoff('→ @gpt: [model=default] is an example to document', team, 'a').handoff).toEqual({
+      to: 'b', text: '[model=default] is an example to document'
+    })
+  })
+
+  it.each([
+    '[model=]: Review',
+    '[model =gpt-6-sol]: Review',
+    '[effort==low]: Review',
+    '[model=gpt-6-sol effrot=low]: Review',
+    '[model=gpt-6-sol effort=low: Review'
+  ])('rejects malformed delegation settings: %s', (task) => {
+    const handoff = parseHandoff(`→ @gpt ${task}`, team, 'a').handoff
+    expect(handoff?.to).toBe('b')
+    expect(handoff?.error).toBeTruthy()
+  })
+
   it('supports partial settings and an explicit reset to the harness default', () => {
     expect(parseHandoff('→ @work [effort=high]: Review', team, 'a').handoff).toEqual({ to: 'c', text: 'Review', overrides: { effort: 'high' } })
     expect(parseHandoff('→ @gpt [model=default effort=default]: Review', team, 'a').handoff).toEqual({ to: 'b', text: 'Review', overrides: { model: '', effort: '' } })

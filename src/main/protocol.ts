@@ -127,7 +127,7 @@ export function formatUpdate(member: Member, pending: Message[], room: Room, inc
   return parts.join('\n')
 }
 
-const ROUTE_RE = /^[\s>*_`]*(?:→|->|=>|➡️?)[\s*_`]*(?:@([\w.-]+)[*_]*(?:\s+\[([^\]\r\n]+)\])?\s*:?\s*(?:\*\*|__|\*|_)?\s*(.*)|(DONE)\b.*)$/i
+const ROUTE_RE = /^[\s>*_`]*(?:→|->|=>|➡️?)[\s*_`]*(?:@([\w.-]+)[*_]*(.*)|(DONE)\b.*)$/i
 
 const GENERIC: Record<string, 'claude' | 'codex'> = { claude: 'claude', gpt: 'codex', codex: 'codex', chatgpt: 'codex', openai: 'codex' }
 
@@ -154,18 +154,27 @@ export function parseHandoff(text: string, room: Room, from?: string): { handoff
   for (let i = lines.length - 1; i >= Math.max(0, lines.length - 4); i--) {
     const match = ROUTE_RE.exec(lines[i])
     if (!match) continue
-    const to = match[4] ? 'done' : resolveHandle(match[1], room, from)
+    const to = match[3] ? 'done' : resolveHandle(match[1], room, from)
     if (!to) continue
     const body = [...lines.slice(0, i), ...lines.slice(i + 1)].join('\n').replace(/\s+$/, '')
-    const handoff: Handoff = { to, text: to === 'done' ? '' : (match[3] ?? '').replace(/(\*\*|__)$/, '').trim() }
-    if (match[2]) {
+    let task = match[2] ?? ''
+    const handoff: Handoff = { to, text: '' }
+    // Brackets are also normal task text and Markdown links. Only a model/effort
+    // assignment before the routing colon opts into delegation settings.
+    const options = /^\s+\[([^\]\r\n]*)(\])?/.exec(task)
+    if (options && /(?:^|\s)(?:model|effort)\s*=/i.test(options[1])) {
       handoff.overrides = {}
-      for (const option of match[2].trim().split(/\s+/)) {
-        const setting = /^(model|effort)=([^\s=]+)$/.exec(option)
-        if (!setting) { handoff.error = 'Unsupported delegation settings. Use model=ID and effort=LEVEL.'; continue }
-        handoff.overrides[setting[1] as 'model' | 'effort'] = setting[2] === 'default' ? '' : setting[2]
+      if (!options[2]) handoff.error = 'Unclosed delegation settings. Use [model=ID effort=LEVEL].'
+      else {
+        task = task.slice(options[0].length)
+        for (const option of options[1].trim().split(/\s+/)) {
+          const setting = /^(model|effort)=([^\s=]+)$/.exec(option)
+          if (!setting) { handoff.error = 'Unsupported delegation settings. Use model=ID and effort=LEVEL.'; continue }
+          handoff.overrides[setting[1] as 'model' | 'effort'] = setting[2] === 'default' ? '' : setting[2]
+        }
       }
     }
+    handoff.text = to === 'done' ? '' : task.replace(/^\s*:?\s*(?:\*\*|__|\*|_)?\s*/, '').replace(/(\*\*|__)$/, '').trim()
     return { handoff, body }
   }
   return { body: text }

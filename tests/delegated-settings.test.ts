@@ -271,6 +271,37 @@ describe('Codex app-server delegated settings', () => {
   })
 })
 
+describe('Codex file change events', () => {
+  it('preserves rename destinations and raw add/delete contents in tool and approval inputs', async () => {
+    const { agent, events, server, starts, complete } = codex()
+    agent.send(turn)
+    await vi.waitFor(() => expect(starts()).toHaveLength(1))
+    const handler = server.subscribe.mock.calls[0][1]
+    const changes = [
+      { path: '/project/old.ts', kind: { type: 'update', move_path: '/project/new name.ts' }, diff: '@@ -1 +1 @@\n-old\n+new\n' },
+      { path: '/project/added.ts', kind: { type: 'add' }, diff: 'export const added = true\n\n' },
+      { path: '/project/deleted.ts', kind: { type: 'delete' }, diff: '--- literal file contents\n+++ still file contents\n' }
+    ]
+    const normalized = [
+      { path: '/project/old.ts', kind: 'update', move_path: '/project/new name.ts', diff: '@@ -1 +1 @@\n-old\n+new\n' },
+      { path: '/project/added.ts', kind: 'add', diff: 'export const added = true\n\n' },
+      { path: '/project/deleted.ts', kind: 'delete', diff: '--- literal file contents\n+++ still file contents\n' }
+    ]
+    handler.notify('item/started', { item: { id: 'files-1', type: 'fileChange', status: 'inProgress', changes } })
+    expect(events).toContainEqual({ t: 'tool-start', id: 'codex-files-1', name: 'Edit files', input: { changes: normalized } })
+
+    handler.request(7, 'item/fileChange/requestApproval', { itemId: 'files-1', reason: 'Apply these changes' })
+    expect(events).toContainEqual(expect.objectContaining({
+      t: 'approval', requestId: 'codex-req-7', toolName: 'file change',
+      input: { changes: normalized, reason: 'Apply these changes' }
+    }))
+
+    handler.notify('item/completed', { item: { id: 'files-1', type: 'fileChange', status: 'completed', changes } })
+    expect(events).toContainEqual({ t: 'tool-input', id: 'codex-files-1', name: 'Edit files', input: { changes: normalized } })
+    complete()
+  })
+})
+
 function exec(settings = baseSettings()) {
   const children: Array<ReturnType<typeof childProcess>> = []
   vi.mocked(spawn).mockImplementation(() => {

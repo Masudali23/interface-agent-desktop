@@ -1,55 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createTwoFilesPatch } from 'diff'
+import { useEffect, useRef, useState } from 'react'
+import { createRecordedChangesSelector } from '@shared/recordedChanges'
 import { editedPaths } from '@shared/changes'
-import { parseUnifiedDiff } from '@shared/diff'
-import type { GitFile, GitState, Message, Room } from '@shared/types'
-import { basename, isBusy, joinPath, relative, str, timeOf } from '../lib/format'
+import type { GitFile, GitState, Room } from '@shared/types'
+import { basename, isBusy, joinPath, relative, timeOf } from '../lib/format'
 import { act, useApp } from '../store'
 import { DiffViewer } from './DiffViewer'
 import { Icon } from './Icon'
-
-interface RecordedEdit { diff: string; label: string; messageId: string; author: string; undone?: boolean }
-interface RecordedFile extends GitFile { edits: RecordedEdit[] }
-
-function recordedFiles(messages: Message[], room: Room): RecordedFile[] {
-  const files = new Map<string, RecordedFile>()
-  const add = (path: string, diff: string, message: Message, excerpt = false): void => {
-    path = relative(path, room.members.find((m) => m.id === message.author)?.worktree?.path ?? room.folder)
-    const parsed = parseUnifiedDiff(diff, path)
-    const entry = files.get(path) ?? { path, status: 'recorded', added: 0, removed: 0, edits: [] }
-    entry.added = (entry.added ?? 0) + parsed.reduce((n, f) => n + f.added, 0)
-    entry.removed = (entry.removed ?? 0) + parsed.reduce((n, f) => n + f.removed, 0)
-    entry.edits.push({ diff, label: `${message.authorName ?? message.author} · ${timeOf(message.createdAt)}${excerpt ? ' · recorded edit excerpt' : ' · turn changes'}`, messageId: message.id, author: message.author, undone: message.undone })
-    files.set(path, entry)
-  }
-  for (const message of messages) {
-    if (message.author === 'user') continue
-    if (message.diff) {
-      // Split at git file headers, preserving original patch text and exact line numbers.
-      const patches = message.diff.split(/(?=^diff --git )/m).filter((patch) => patch.trim())
-      for (const patch of patches) {
-        const file = parseUnifiedDiff(patch)[0]
-        if (file) add(file.path, patch, message)
-      }
-      continue
-    }
-    for (const block of message.blocks) {
-      if (block.kind !== 'tool' || block.status !== 'done') continue
-      const input = (block.input ?? {}) as Record<string, unknown>
-      const paths = editedPaths(block)
-      if (!paths.length) continue
-      if (block.name === 'Edit files' && Array.isArray(input.changes)) {
-        for (const change of input.changes) if (typeof change.path === 'string') add(change.path, typeof change.diff === 'string' ? change.diff : '', message)
-      } else if (block.name === 'Write') {
-        add(paths[0], createTwoFilesPatch(paths[0], paths[0], '', str(input.content)), message, true)
-      } else if (block.name === 'Edit' || block.name === 'MultiEdit') {
-        const edits = block.name === 'MultiEdit' && Array.isArray(input.edits) ? input.edits : [input]
-        for (const edit of edits) add(paths[0], createTwoFilesPatch(paths[0], paths[0], str(edit.old_string), str(edit.new_string)), message, true)
-      } else add(paths[0], '', message, true)
-    }
-  }
-  return [...files.values()]
-}
 
 export function ChangesPanel({ room }: { room: Room }) {
   const target = useApp((s) => s.changeTarget)
@@ -71,13 +27,14 @@ export function ChangesPanel({ room }: { room: Room }) {
   const [mode, setMode] = useState<'unified' | 'split'>('unified')
   const fingerprint = useRef('')
   const refreshRef = useRef<() => void>(() => {})
+  const refreshDiffRef = useRef<(version: number) => void>(() => {})
   const previouslyPresent = useRef('')
   const member = room.members.find((m) => m.id === scope)
   const root = member?.worktree?.path ?? room.folder
   const rootVersion = useApp((s) => s.dirVersion[root] ?? 0)
   const recorded = source === 'recorded' || state?.isRepo === false
-  const historyVersion = recorded ? room.messages.map((message) => `${message.id}:${message.undone}:${message.diff ?? ''}:${message.blocks.filter((block) => block.kind === 'tool' && block.status === 'done').map((block) => block.id).join(',')}`).join('|') : ''
-  const records = useMemo(() => recorded ? recordedFiles(room.messages.filter((m) => !turn || m.id === turn), room) : [], [recorded, historyVersion, room.folder, room.members, turn]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selectRecords = useRef(createRecordedChangesSelector())
+  const records = recorded ? selectRecords.current(room, turn) : []
   const allFiles: GitFile[] = recorded ? records : state?.files ?? []
   const visible = allFiles.filter((file) => file.path.toLowerCase().includes(filter.toLowerCase()))
   const current = allFiles.find((file) => file.path === selected)
@@ -132,12 +89,34 @@ export function ChangesPanel({ room }: { room: Room }) {
   }, [selected, allFiles])
   useEffect(() => {
     if (recorded || !current) return
-    let live = true
-    window.iface.gitDiff(room.id, current.path, scope || undefined, current.oldPath)
-      .then((text) => { if (live) { setDiff(text); setError('') } })
-      .catch((err) => { if (live) { setDiff(undefined); setError(String(err)) } })
-    return () => { live = false }
-  }, [room.id, scope, current?.path, current?.oldPath, recorded, revision]) // eslint-disable-line react-hooks/exhaustive-deps
+    let live = true, running = false, dirty = false
+    let requestedVersion: number | undefined
+    const refresh = async (): Promise<void> => {
+      if (!live) return
+      if (running) { dirty = true; return }
+      running = true
+      try {
+        const text = await window.iface.gitDiff(room.id, current.path, scope || undefined, current.oldPath)
+        if (live) { setDiff(text); setError('') }
+      } catch (err) {
+        if (live) { setDiff(undefined); setError(String(err)) }
+      } finally {
+        running = false
+        if (dirty && live) { dirty = false; void refresh() }
+      }
+    }
+    const request = (version: number): void => {
+      // Selection setup and the revision effect may see the same render. Fetch it
+      // once; later invalidations queue one refresh while the current diff runs.
+      if (version === requestedVersion) return
+      requestedVersion = version
+      void refresh()
+    }
+    refreshDiffRef.current = request
+    request(revision)
+    return () => { live = false; refreshDiffRef.current = () => {} }
+  }, [room.id, scope, current?.path, current?.oldPath, recorded]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { refreshDiffRef.current(revision) }, [revision])
   useEffect(() => { setDiff(undefined) }, [selected, scope, source])
 
   return (
@@ -175,8 +154,8 @@ export function ChangesPanel({ room }: { room: Room }) {
           }}><Icon name="file" size={13} /></button>
         </div>
         <div className="review-scroll">
-          {recorded ? records.find((file) => file.path === current.path)?.edits.map((edit, index) => <div key={`${edit.messageId}-${index}`}><div className="review-record-label">{edit.label}{edit.undone ? ' · Undone' : ''}</div>{edit.diff ? <DiffViewer diff={edit.diff} path={current.path} mode={mode} /> : <div className="panel-note">File activity recorded without a text patch.</div>}</div>)
-            : diff === undefined ? <div className="panel-empty">Loading diff…</div> : diff ? <DiffViewer key={current.path} diff={diff} path={current.path} mode={mode} /> : <div className="panel-note">No text changes; this may be a rename, mode change, or binary file.</div>}
+          {recorded ? records.find((file) => file.path === current.path)?.edits.map((edit, index) => <div key={`${edit.messageId}-${index}`}><div className="review-record-label">{edit.authorName ?? edit.author} · {timeOf(edit.createdAt)}{edit.excerpt ? ' · recorded edit excerpt' : ' · turn changes'}{edit.undone ? ' · Undone' : ''}</div>{edit.diff ? <DiffViewer diff={edit.diff} path={current.path} oldPath={edit.oldPath} mode={mode} /> : <div className="panel-note">File activity recorded without a text patch.</div>}</div>)
+            : diff === undefined ? <div className="panel-empty">Loading diff…</div> : diff ? <DiffViewer key={current.path} diff={diff} path={current.path} oldPath={current.oldPath} mode={mode} /> : <div className="panel-note">No text changes; this may be a rename, mode change, or binary file.</div>}
         </div>
       </>}
       {member?.worktree && !recorded && <div className="worktree-actions">

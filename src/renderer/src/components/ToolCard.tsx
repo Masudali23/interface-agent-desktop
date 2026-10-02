@@ -4,7 +4,8 @@ import type { Block } from '@shared/types'
 import { relative, str, toolSummary, TOOL_VERB } from '../lib/format'
 import { Icon, type IconName } from './Icon'
 import { useApp } from '../store'
-import { editedPaths } from '@shared/changes'
+import { codexFileChange, editedPaths } from '@shared/changes'
+import { DiffViewer } from './DiffViewer'
 
 type ToolBlock = Extract<Block, { kind: 'tool' }>
 type Input = Record<string, unknown>
@@ -66,45 +67,8 @@ export function DiffView({ before, after, path }: { before: string; after: strin
 }
 
 /** Renders a unified diff (git / Codex format). */
-export function UnifiedDiff({ diff, path }: { diff: string; path?: string }) {
-  const lines = diff.replace(/\n$/, '').split('\n')
-  let added = 0
-  let removed = 0
-  for (const l of lines) {
-    if (l.startsWith('+') && !l.startsWith('+++')) added++
-    else if (l.startsWith('-') && !l.startsWith('---')) removed++
-  }
-  return (
-    <div className="diff">
-      {path && (
-        <div className="diff-head">
-          <span>{path}</span>
-          <span className="diff-stat">
-            <span className="add">+{added}</span> <span className="del">−{removed}</span>
-          </span>
-        </div>
-      )}
-      <pre className="diff-body">
-        {lines.map((l, i) => {
-          const cls =
-            l.startsWith('+++') || l.startsWith('---') || l.startsWith('diff ') || l.startsWith('index ')
-              ? 'line meta'
-              : l.startsWith('@@')
-                ? 'line hunk'
-                : l.startsWith('+')
-                  ? 'line add'
-                  : l.startsWith('-')
-                    ? 'line del'
-                    : 'line'
-          return (
-            <div key={i} className={cls}>
-              {l || ' '}
-            </div>
-          )
-        })}
-      </pre>
-    </div>
-  )
+export function UnifiedDiff({ diff, path, oldPath }: { diff: string; path?: string; oldPath?: string }) {
+  return <div className="diff"><DiffViewer diff={diff} path={path} oldPath={oldPath} /></div>
 }
 
 function Todos({ items }: { items: Input[] }) {
@@ -162,15 +126,16 @@ export function ToolDetails({ name, input, root }: { name: string; input: unknow
     case 'Edit files':
       return (
         <>
-          {(Array.isArray(i.changes) ? (i.changes as Input[]) : []).map((c, k) =>
-            c.diff ? (
-              <UnifiedDiff key={k} diff={str(c.diff)} path={`${str(c.kind) === 'add' ? 'new: ' : str(c.kind) === 'delete' ? 'deleted: ' : ''}${relative(str(c.path), root)}`} />
-            ) : (
+          {(Array.isArray(i.changes) ? i.changes : []).map((raw, k) => {
+            const change = codexFileChange(raw)
+            if (!change) return null
+            const path = relative(change.path, root)
+            return change.diff ? <UnifiedDiff key={k} diff={change.diff} path={path} oldPath={change.oldPath ? relative(change.oldPath, root) : undefined} /> : (
               <div key={k} className="changes-list">
-                <span className={`kind kind-${str(c.kind)}`}>{str(c.kind) || 'update'}</span> {relative(str(c.path), root)}
+                <span className={`kind kind-${change.kind}`}>{change.kind}</span> {change.oldPath ? `${relative(change.oldPath, root)} → ` : ''}{path}
               </div>
             )
-          )}
+          })}
         </>
       )
     default:

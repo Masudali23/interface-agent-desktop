@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resetText, tokens, untilText, usageText } from '../src/renderer/src/lib/format'
+import { relative, resetText, tokens, untilText, usageText } from '../src/renderer/src/lib/format'
 
 const NOW = new Date('2026-10-02T12:00:00Z').getTime()
 const MIN = 60000
+
+it('shortens file paths only within the project directory', () => {
+  expect(relative('/project/file.ts', '/project')).toBe('file.ts')
+  expect(relative('/project/file.ts', '/project/')).toBe('file.ts')
+  expect(relative('/project-other/file.ts', '/project')).toBe('/project-other/file.ts')
+  expect(relative('/file.ts', '/')).toBe('file.ts')
+  expect(relative('C:\\project\\file.ts', 'C:\\project')).toBe('file.ts')
+})
 
 describe('reset countdown', () => {
   beforeEach(() => {

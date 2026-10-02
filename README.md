@@ -52,6 +52,8 @@ npm run dist:linux
 
 Artifacts are written to `dist/`. macOS produces an ARM64 DMG and ZIP with an ad-hoc signature, without notarization. Ubuntu produces x64 AppImage and Debian packages. Use the actual generated filename when installing a Debian package, for example `sudo apt install ./dist/<generated-file>.deb`. Linux desktop libraries and AppImage runtime support depend on the distribution. Validate an installer on the intended machine before distributing it.
 
+On Ubuntu, `apt` reads local packages as its unprivileged `_apt` user. A checkout under a private home folder makes it print a harmless `N: Download is performed unsandboxed as root` note; copying the `.deb` to `/tmp` first avoids it. Installing over an earlier version keeps `~/.config/Interface` (sessions, accounts and settings) and the single `interface` launcher.
+
 ## Accounts and local data
 
 The primary accounts use the CLI configuration in `~/.claude` and `~/.codex`. Additional accounts have isolated configuration directories under Interface's application data folder. The app supports copying selected settings, skills and MCP configuration from the primary account; authentication and usage behavior still come from the underlying tools.
@@ -92,6 +94,6 @@ If the remote has advanced or the branches diverge, the script stops for deliber
 | `src/renderer/` | React user interface |
 | `tests/` | Unit and local integration tests |
 
-For an optional end-to-end run against installed, authenticated CLIs, inspect `runE2E` in `src/main/index.ts`. It is enabled through `INTERFACE_E2E` and can generate real agent activity; the ordinary CI suite does not use it.
+For an optional end-to-end run against installed, authenticated CLIs, inspect `runE2E` in `src/main/index.ts`. It is enabled through `INTERFACE_E2E` and can generate real agent activity; the ordinary CI suite does not use it. Point `INTERFACE_USER_DATA` at a temporary folder so real sessions are untouched. Besides agent turns, its steps can click controls through Chromium's real input pipeline (`click`), type into the focused element such as the terminal (`type`), scroll the chat with the wheel (`wheel`), hit-test every visible control for overlap (`audit`), evaluate UI state (`eval`), tick agents (`tick`), change agent settings (`member-settings`) and copy the chat export (`export-copy`). `noRoom: true` starts on the home screen, and `INTERFACE_E2E_PICK` answers the folder dialog.
 
 The source is publicly visible, but `package.json` currently declares `UNLICENSED`; no open-source license grant is included.

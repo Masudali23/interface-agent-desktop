@@ -65,9 +65,10 @@ function Questions({ block, questions, onAnswer }: { block: Approval; questions:
       ))}
       {pending && (
         <div className="approval-actions">
-          <button className="btn primary" disabled={!complete} onClick={() => onAnswer({ kind: 'answer', answers })}>
+          <button className="btn primary" disabled={!complete} onClick={() => onAnswer({ kind: 'answer', answers })} title={complete ? undefined : 'Answer every question first'}>
             Send answers
           </button>
+          {!complete && <span className="hint">Answer every question to send</span>}
           <button className="btn" onClick={() => onAnswer({ kind: 'deny', message: 'The user skipped these questions.' })}>
             Skip
           </button>

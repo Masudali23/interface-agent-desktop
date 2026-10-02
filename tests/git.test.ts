@@ -316,3 +316,12 @@ describe('agent worktrees', () => {
     expect(await command(root, 'ls-files', '.collab')).toBe('')
   })
 })
+
+describe('own-copy worktrees outside git', () => {
+  it('explains that the folder must be a git repository', async () => {
+    const plain = mkdtempSync(join(tmpdir(), 'interface-plain-'))
+    roots.push(plain)
+    await expect(addWorktree(plain, join(plain, 'copy'), 'interface/r1/agent')).rejects.toThrow(/needs a git repository/)
+  })
+})
+

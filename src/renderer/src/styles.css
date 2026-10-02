@@ -3043,3 +3043,42 @@ pre {
 .term-view .xterm {
   height: 100%;
 }
+
+/* ---------- dialogs: say why something can't happen ---------- */
+
+.form-error,
+.form-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.form-error {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.form-warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+.form-error svg,
+.form-warn svg {
+  flex: none;
+  margin-top: 2px;
+}
+.ao-problem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+.account-option.has-problem {
+  border-style: dashed;
+}
+.approval-actions .hint {
+  align-self: center;
+}

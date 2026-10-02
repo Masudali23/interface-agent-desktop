@@ -246,6 +246,9 @@ async function validateBranch(cwd: string, branch: string): Promise<void> {
 
 /** Creates an agent worktree, retaining the common base when reusing its branch. */
 export async function addWorktree(repo: string, path: string, branch: string): Promise<{ base: string }> {
+  if (!(await isRepo(repo))) {
+    throw new Error('"Own copy" needs a git repository, and this folder is not one. Turn that option off, or run `git init` and make a first commit in the folder.')
+  }
   await validateBranch(repo, branch)
   const head = await git(repo, ['rev-parse', '--verify', 'HEAD^{commit}'])
   if (head.code !== 0) throw new Error('This folder has no commits yet. Make a first commit so each agent can get its own copy.')

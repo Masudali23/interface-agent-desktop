@@ -1,4 +1,4 @@
-import type { AgentStatus, Block, Message, MessageUsage } from '@shared/types'
+import type { AccountInfo, AgentStatus, Block, Message, MessageUsage } from '@shared/types'
 
 export function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean)
@@ -201,4 +201,12 @@ export function languageOf(path: string): string | undefined {
     dockerfile: 'dockerfile', makefile: 'makefile', tex: 'latex'
   }
   return map[ext]
+}
+
+/** Why an account can't work right now, if it can't: not signed in, or a limit used up. */
+export function accountProblem(info: AccountInfo | undefined): string | undefined {
+  if (info?.loggedIn === false) return 'Not signed in. Sign in from Settings → Accounts first'
+  const full = info?.limits.find((l) => l.percent >= 100)
+  if (full) return `${full.label} limit reached${full.resetsAt ? `, resets in ${untilText(full.resetsAt)}` : ''}`
+  return undefined
 }

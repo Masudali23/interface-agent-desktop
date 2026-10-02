@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { PROVIDER_LABEL, type Account, type RoomKind } from '@shared/types'
-import { basename } from '../lib/format'
-import { act, useApp, EMPTY } from '../store'
+import { accountProblem, basename } from '../lib/format'
+import { useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
 
 const KINDS: Array<{ id: RoomKind; label: string; hint: string }> = [
@@ -12,8 +12,9 @@ const KINDS: Array<{ id: RoomKind; label: string; hint: string }> = [
 
 function AccountOption({ account, checked, multi, onChange }: { account: Account; checked: boolean; multi: boolean; onChange: (on: boolean) => void }) {
   const info = useApp((s) => s.accountInfo[account.id])
+  const problem = accountProblem(info)
   return (
-    <label className={`account-option ${checked ? 'on' : ''}`}>
+    <label className={`account-option ${checked ? 'on' : ''} ${problem ? 'has-problem' : ''}`}>
       <input type={multi ? 'checkbox' : 'radio'} checked={checked} onChange={(e) => onChange(e.target.checked)} />
       <AgentMark provider={account.provider} color={account.color} size={20} />
       <span className="ao-main">
@@ -25,6 +26,11 @@ function AccountOption({ account, checked, multi, onChange }: { account: Account
           {info?.loggedIn === false ? ' · not signed in' : info?.email ? ` · ${info.email}` : ''}
           {info?.plan ? ` · ${info.plan}` : ''}
         </span>
+        {problem && (
+          <span className="ao-problem">
+            <Icon name="alert" size={11} /> {problem}
+          </span>
+        )}
       </span>
     </label>
   )
@@ -42,12 +48,15 @@ export function NewSessionDialog() {
   const [picked, setPicked] = useState<string[]>([])
   const [isolation, setIsolation] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [error, setError] = useState<string>()
+  const accountInfo = useApp((s) => s.accountInfo)
 
   useEffect(() => {
     if (!request) return
     setKind(request.kind)
     setFolder(request.folder ?? recent[0])
     setIsolation(false)
+    setError(undefined)
   }, [request]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -63,21 +72,41 @@ export function NewSessionDialog() {
   if (!request) return null
   const list = kind === 'team' ? accounts : accounts.filter((a) => a.provider === kind)
 
-  const browse = async (): Promise<void> => {
+  const browse = async (): Promise<string | undefined> => {
     const dir = await window.iface.pickFolder()
-    if (dir) setFolder(dir)
+    if (dir) {
+      setFolder(dir)
+      setError(undefined)
+    }
+    return dir ?? undefined
   }
 
+  // Start is never a dead button: it says what is missing, or asks for the folder.
   const create = async (): Promise<void> => {
-    if (!folder || !picked.length) return
+    if (creating) return
+    if (!picked.length) {
+      setError(list.length ? 'Tick at least one account.' : 'Add an account first.')
+      return
+    }
+    const dir = folder ?? (await browse())
+    if (!dir) {
+      setError('Choose the project folder the agents will work in.')
+      return
+    }
+    setError(undefined)
     setCreating(true)
-    const room = await act(() => window.iface.createRoom({ folder, kind, accountIds: picked, isolation }))
-    setCreating(false)
-    if (room) {
+    try {
+      const room = await window.iface.createRoom({ folder: dir, kind, accountIds: picked, isolation })
       close()
       await openRoom(room.id)
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)).replace(/^Error invoking remote method 'api': (Error: )?/, ''))
+    } finally {
+      setCreating(false)
     }
   }
+
+  const blocked = picked.map((id) => accounts.find((a) => a.id === id)).filter((a) => a && accountProblem(accountInfo[a.id])) as Account[]
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}>
@@ -105,7 +134,7 @@ export function NewSessionDialog() {
           <h3>Folder</h3>
           <div className="folder-pick">
             <div className="folder-current" title={folder}>
-              <Icon name="folder" size={14} /> {folder ?? 'No folder chosen'}
+              <Icon name="folder" size={14} /> {folder ?? 'No folder chosen yet'}
             </div>
             <button className="btn" onClick={() => void browse()}>
               Choose…
@@ -123,7 +152,14 @@ export function NewSessionDialog() {
 
           <h3>
             {kind === 'team' ? 'Agents' : 'Account'}
-            <button className="btn tiny" onClick={() => openSettings('accounts')}>
+            <button
+              className="btn tiny"
+              onClick={() => {
+                // Settings opens on top; this dialog would otherwise hide it.
+                close()
+                openSettings('accounts')
+              }}
+            >
               <Icon name="plus" size={11} /> Add account
             </button>
           </h3>
@@ -155,12 +191,27 @@ export function NewSessionDialog() {
             </label>
           )}
 
+          {blocked.length > 0 && (
+            <div className="form-warn">
+              <Icon name="alert" size={13} />
+              <span>
+                {blocked.map((a) => a.name).join(', ')} can't work right now (see above). You can still start; {blocked.length === 1 ? 'it' : 'they'} will
+                reply with an error until fixed.
+              </span>
+            </div>
+          )}
+          {error && (
+            <div className="form-error" role="alert">
+              <Icon name="alert" size={13} />
+              <span>{error}</span>
+            </div>
+          )}
           <div className="modal-actions">
             <button className="btn" onClick={close}>
               Cancel
             </button>
-            <button className="btn primary" disabled={!folder || !picked.length || creating} onClick={() => void create()}>
-              {creating ? 'Starting…' : 'Start session'}
+            <button className="btn primary" disabled={creating} onClick={() => void create()}>
+              {creating ? 'Starting…' : folder ? 'Start session' : 'Choose folder and start'}
             </button>
           </div>
         </div>

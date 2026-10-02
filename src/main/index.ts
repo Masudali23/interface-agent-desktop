@@ -26,6 +26,7 @@ import { findBinary, initShellPath, run } from './env'
 import { Files } from './files'
 import { fileDiff, listFiles, status as gitStatus } from './git'
 import { RoomManager } from './rooms'
+import { UI_AUDIT_SCRIPT } from './selftestAudit'
 import { Store } from './store'
 import { Terminals } from './terminal'
 
@@ -225,6 +226,8 @@ const api: IfaceApi = {
     return info
   },
   pickFolder: async () => {
+    // Self-test only: answer the folder dialog without showing it.
+    if (process.env.INTERFACE_E2E && process.env.INTERFACE_E2E_PICK) return process.env.INTERFACE_E2E_PICK
     const opts = { properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> }
     const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     return res.canceled || !res.filePaths[0] ? null : res.filePaths[0]
@@ -406,12 +409,16 @@ function registerProtocol(): void {
 
 interface E2EStep {
   text?: string
-  action?: 'retry' | 'edit' | 'undo' | 'screenshot' | 'usage' | 'menu' | 'wait' | 'merge' | 'add-account' | 'terminal'
+  /** Send the text without waiting for the agents to finish. */
+  noWait?: boolean
+  action?: 'retry' | 'edit' | 'undo' | 'screenshot' | 'usage' | 'menu' | 'wait' | 'merge' | 'add-account' | 'terminal' | 'eval' | 'export-copy' | 'idle' | 'tick' | 'audit' | 'click' | 'type' | 'wheel' | 'member-settings'
   path?: string
 }
 
 interface E2EConfig {
   folder: string
+  /** Start on the home screen without creating a session first. */
+  noRoom?: boolean
   kind: 'claude' | 'codex' | 'team'
   accounts?: string[]
   isolation?: boolean
@@ -425,6 +432,81 @@ interface E2EConfig {
 async function runE2E(configPath: string): Promise<void> {
   const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as E2EConfig
   const log: string[] = []
+  const capture = async (path: string): Promise<void> => {
+    const image = await win?.webContents.capturePage()
+    if (image) writeFileSync(path, image.toPNG())
+  }
+  // A real mouse click through Chromium's input pipeline (hit-testing included) at the
+  // centre of the first visible control whose text or title starts with `label`,
+  // searching the open dialog first.
+  const clickLabel = async (label: string): Promise<void> => {
+    const box = await win?.webContents.executeJavaScript(`(() => {
+      const modals = document.querySelectorAll('.modal')
+      const scope = modals.length ? modals[modals.length - 1] : document
+      const candidates = [...scope.querySelectorAll('button, [role=button], .chip, .kind-card, label')].filter((e) => e.getBoundingClientRect().width > 0)
+      const wanted = ${JSON.stringify(label)}
+      const el = candidates.find((e) => e.title === wanted || e.getAttribute('aria-label') === wanted)
+        ?? candidates.find((e) => (e.innerText || '').trim() === wanted)
+        ?? candidates.find((e) => (e.innerText || e.title || '').trim().startsWith(wanted))
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), disabled: !!el.disabled, what: el.tagName + '.' + String(el.className).split(' ')[0] }
+    })()`)
+    if (!box) {
+      log.push(`click ${label}: not found`)
+      return
+    }
+    win?.webContents.sendInputEvent({ type: 'mouseMove', x: box.x, y: box.y })
+    win?.webContents.sendInputEvent({ type: 'mouseDown', x: box.x, y: box.y, button: 'left', clickCount: 1 })
+    win?.webContents.sendInputEvent({ type: 'mouseUp', x: box.x, y: box.y, button: 'left', clickCount: 1 })
+    await new Promise((r) => setTimeout(r, 800))
+    log.push(`click ${label}: ${box.what} at ${box.x},${box.y}${box.disabled ? ' (disabled)' : ''}`)
+  }
+  const uiStep = async (step: E2EStep): Promise<boolean> => {
+    if (step.action === 'menu' && step.path) emit({ type: 'menu', action: step.path as Extract<AppEvent, { type: 'menu' }>['action'] })
+    else if (step.action === 'wait') await new Promise((r) => setTimeout(r, Number(step.path ?? 2000)))
+    else if (step.action === 'eval' && step.path) log.push(`eval: ${JSON.stringify(await win?.webContents.executeJavaScript(step.path))}`)
+    else if (step.action === 'audit') log.push(`audit ${step.path ?? ''}: ${JSON.stringify(await win?.webContents.executeJavaScript(UI_AUDIT_SCRIPT))}`)
+    else if (step.action === 'click' && step.path) await clickLabel(step.path)
+    else if (step.action === 'type' && step.path !== undefined) {
+      // Real key events into whatever has focus (for example the terminal); "\n" presses Enter.
+      for (const ch of step.path) {
+        if (ch === '\n') {
+          win?.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
+          win?.webContents.sendInputEvent({ type: 'char', keyCode: '\r' })
+          win?.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
+        } else win?.webContents.sendInputEvent({ type: 'char', keyCode: ch })
+      }
+      await new Promise((r) => setTimeout(r, 1500))
+      log.push(`terminal output so far: ${JSON.stringify(e2eTerminal.join('').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').slice(-300))}`)
+    } else if (step.action === 'wheel') {
+      // Real mouse-wheel scroll over the chat list. Chromium wheel deltas are positive
+      // upwards, so a positive path scrolls up and a negative one down.
+      const box = await win?.webContents.executeJavaScript(`(() => { const r = document.querySelector('.messages')?.getBoundingClientRect(); return r ? { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } : null })()`)
+      if (box) win?.webContents.sendInputEvent({ type: 'mouseWheel', x: box.x, y: box.y, deltaX: 0, deltaY: Number(step.path ?? -600), canScroll: true })
+      await new Promise((r) => setTimeout(r, 600))
+    }
+    else if (step.action === 'screenshot' && step.path) {
+      await new Promise((r) => setTimeout(r, 1200))
+      await capture(step.path)
+    } else return false
+    return true
+  }
+  if (cfg.noRoom) {
+    for (const step of cfg.steps) {
+      try {
+        await uiStep(step)
+      } catch (err) {
+        log.push(`step failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    await capture(cfg.screenshot)
+    store.flush()
+    writeFileSync(`${cfg.screenshot}.json`, JSON.stringify({ log, rooms: store.list() }, null, 1))
+    quitConfirmed = true
+    app.quit()
+    return
+  }
   const ids = cfg.accounts ?? (cfg.kind === 'codex' ? [accounts.firstOf('codex')!.id] : cfg.kind === 'claude' ? [accounts.firstOf('claude')!.id] : [accounts.firstOf('claude')!.id, accounts.firstOf('codex')!.id])
   const room = await rooms.create({ folder: cfg.folder, kind: cfg.kind, accountIds: ids, isolation: !!cfg.isolation })
   if (cfg.memberSettings) for (const m of room.members) rooms.updateMember(room.id, m.id, cfg.memberSettings)
@@ -454,7 +536,21 @@ async function runE2E(configPath: string): Promise<void> {
       if (step.text) {
         const current = rooms.get(room.id)!
         rooms.send(room.id, { text: step.text, to: parseMentions(step.text, current.members) ?? [], attachments: [] })
+        if (!step.noWait) await waitIdle()
+      } else if (await uiStep(step)) {
+        // handled above
+      } else if (step.action === 'member-settings' && step.path) {
+        // Change every agent's settings mid-session, as the model/mode menus do.
+        for (const m of rooms.get(room.id)?.members ?? []) rooms.updateMember(room.id, m.id, JSON.parse(step.path))
+      } else if (step.action === 'idle') {
         await waitIdle()
+      } else if (step.action === 'tick' && step.path) {
+        const members = rooms.get(room.id)?.members ?? []
+        rooms.updateRoom(room.id, { active: members.filter((m) => step.path!.split(',').includes(m.provider)).map((m) => m.id) })
+      } else if (step.action === 'export-copy') {
+        const r = await api.exportChat(room.id, 'copy')
+        const text = await clipboard.readText()
+        log.push(`export: ${r.action}, ${text.length} chars, header=${text.startsWith('# ')}, messages=${(text.match(/^## \d+\. /gm) ?? []).length}`)
       } else if (step.action === 'retry') {
         await rooms.retry(room.id, lastAgent()!)
         await waitIdle()
@@ -463,8 +559,6 @@ async function runE2E(configPath: string): Promise<void> {
         await waitIdle()
       } else if (step.action === 'undo') {
         log.push(`undo: ${await rooms.undoTurn(room.id, lastAgent()!)}`)
-      } else if (step.action === 'menu' && step.path) {
-        emit({ type: 'menu', action: step.path as Extract<AppEvent, { type: 'menu' }>['action'] })
       } else if (step.action === 'add-account' && step.path) {
         const [provider, name] = step.path.split(':')
         log.push(`added ${JSON.stringify(accounts.add(provider as 'claude' | 'codex', name))}`)
@@ -478,14 +572,8 @@ async function runE2E(configPath: string): Promise<void> {
         for (const m of rooms.get(room.id)?.members ?? []) {
           if (m.worktree) log.push(`merge ${m.name}: ${await rooms.mergeWorktree(room.id, m.id)}`)
         }
-      } else if (step.action === 'wait') {
-        await new Promise((r) => setTimeout(r, Number(step.path ?? 2000)))
       } else if (step.action === 'usage') {
         for (const a of accounts.list()) await accounts.refresh(a.id)
-      } else if (step.action === 'screenshot' && step.path) {
-        await new Promise((r) => setTimeout(r, 1200))
-        const image = await win?.webContents.capturePage()
-        if (image) writeFileSync(step.path, image.toPNG())
       }
     } catch (err) {
       log.push(`step failed: ${err instanceof Error ? err.message : String(err)}`)

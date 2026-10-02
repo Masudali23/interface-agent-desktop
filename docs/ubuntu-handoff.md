@@ -25,3 +25,10 @@ Finish by reporting the integrated source commits, Ubuntu commit hash, branch an
 ```
 
 The prompt does not guarantee a conflict-free merge. For a failed push, keep the local commits and inspect the updated remote before trying again. Worktrees and backup branches should remain available until their owner confirms the preserved work is no longer needed.
+
+## Ubuntu machine notes
+
+- The Ubuntu checkout lives in `~/interface-agent-desktop` on the `ubuntu` branch. The older `~/Interface` folder predates the repository; it is a Git directory with no commits, kept untouched as a backup and not used for publishing.
+- Installing the `.deb` needs `sudo` with a password, so an agent session builds the package and the user runs the final `sudo apt install`. Copying the package to `/tmp` first avoids the harmless `_apt` note.
+- The local Codex `config.toml` may name a model this ChatGPT plan rejects; Interface falls back to the account's default model from `model/list`.
+- Ubuntu 0.3.4 adds to macOS 0.3.3: a New session start button that asks for a missing folder and explains other blockers, Add account opening Settings in front, warnings for signed-out or exhausted accounts, a hint on unanswered questions, a clear error for "own copy" outside Git, and extra end-to-end self-test steps.

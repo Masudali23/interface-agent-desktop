@@ -1,0 +1,57 @@
+{
+  "name": "interface",
+  "productName": "Interface",
+  "version": "0.3.0",
+  "description": "One room where you, Claude Code and Codex work together on a local folder",
+  "homepage": "https://github.com/Masudali23/interface-agent-desktop",
+  "desktopName": "interface.desktop",
+  "main": "out/main/index.js",
+  "author": {
+    "name": "Masudali23",
+    "email": "alimasud2023@gmail.com"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "dist:linux": "npm run build && electron-builder --linux --x64",
+    "dist:mac": "npm run build && electron-builder --mac --arm64",
+    "sync:session": "bash scripts/session-sync.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "diff": "^8.0.4",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "highlight.js": "^11.12.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "typescript": "5.9",
+    "vite": "^7.3.6",
+    "vitest": "^3.2.7",
+    "zustand": "^5.0.15"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Masudali23/interface-agent-desktop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Masudali23/interface-agent-desktop/issues"
+  }
+}

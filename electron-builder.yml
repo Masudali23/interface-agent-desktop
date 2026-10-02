@@ -1,0 +1,39 @@
+appId: dev.dhiraj.interface
+productName: Interface
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - resources/**
+  - package.json
+asar: true
+# The terminal's native module and its helper must live outside the archive.
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  category: public.app-category.developer-tools
+  # Personal build: ad-hoc signature, no Apple developer account needed.
+  identity: '-'
+  hardenedRuntime: false
+  notarize: false
+dmg:
+  artifactName: Interface-${version}-mac-${arch}.${ext}
+linux:
+  # One PNG per standard size so GNOME and KDE find the icon.
+  icon: build/icons
+  target:
+    - AppImage
+    - deb
+  category: Development
+  maintainer: Masudali23 <alimasud2023@gmail.com>
+  synopsis: You, Claude Code and Codex in one room
+  syncDesktopName: true
+  artifactName: Interface-${version}-linux-${arch}.${ext}
+deb:
+  depends: [libnotify4, libxtst6, libnss3]

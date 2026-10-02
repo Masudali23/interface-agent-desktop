@@ -380,7 +380,7 @@ export class RoomManager {
     const reserved = new Set((rt.queue.get(memberId) ?? []).flatMap((job) => job.sourceMessageId ? [job.sourceMessageId] : []))
     // A completed reply can still be taking its final snapshot before enqueuing its relay.
     for (const message of rt.current.values()) {
-      if (message.status !== 'streaming' && message.handoff?.to === memberId && message.handoffDone) reserved.add(message.id)
+      if (message.status !== 'streaming' && message.handoff?.to === memberId && message.handoffDone && !rt.jobs.get(message.author)?.canceled) reserved.add(message.id)
     }
     return pendingFor(memberId, room.messages).filter((m) =>
       !(m.handoff?.to === memberId && reserved.has(m.id) && m.id !== sourceMessageId))
@@ -855,7 +855,7 @@ export class RoomManager {
       rt.current.delete(memberId)
       rt.jobs.delete(memberId)
       if (relay && !job?.canceled) this.enqueue(room, { memberId: target!, hop: (message.hop ?? 0) + 1, overrides: handoff?.overrides, sourceMessageId: message.id })
-      else if (relay) { message.handoffDone = false; this.emitMessage(room.id, message, true); this.store.saveSoon(room.id) }
+      else if (relay) { message.handoffDone = (message.deliveredTo ?? []).includes(target!); this.emitMessage(room.id, message, true); this.store.saveSoon(room.id) }
       this.pump(room, memberId)
     })
   }
@@ -869,6 +869,9 @@ export class RoomManager {
       rt.queue.set(m.id, [])
       const job = rt.jobs.get(m.id)
       if (job) job.canceled = true
+      const current = rt.current.get(m.id)
+      const target = current?.handoff?.to
+      if (current && current.status !== 'streaming' && current.handoffDone && target && !(current.deliveredTo ?? []).includes(target)) this.releaseInput(room!, target, [current.id])
       const connector = rt.connectors.get(m.id)
       if (connector?.busy) connector.interrupt()
       else if (room && rt.current.get(m.id)?.status === 'streaming') this.finishTurn(room, m.id, { t: 'turn-end', ok: false, stopped: true })

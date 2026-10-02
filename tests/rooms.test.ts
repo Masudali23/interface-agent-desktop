@@ -519,6 +519,29 @@ describe('RoomManager unrelayed handoffs', () => {
     expect(handoff.handoffDone).toBe(true)
   })
 
+  it('delivers a cancelled planned relay immediately, without its snapshot later undoing delivery', async () => {
+    const { manager, room, send, replies } = setup()
+    send('Plan the work')
+    await settle()
+    const ending = deferred<string>()
+    vi.mocked(snapshot).mockReturnValueOnce(ending.promise)
+    complete(mocks.connectors[0], 'Plan ready\n→ @gpt: Implement worker.ts with retries')
+    manager.stop(room.id, 'a')
+    send('Now do what Claude asked', ['b'])
+    await settle()
+    const worker = mocks.connectors[1]
+    expect(worker.send.mock.calls[0][0].text).toContain('Implement worker.ts with retries')
+    const handoff = replies('a')[0]
+    expect(handoff.handoffDone).toBe(true)
+    ending.resolve('after')
+    await settle()
+    expect(handoff.handoffDone).toBe(true)
+    manager.continueHandoff(room.id, handoff.id)
+    complete(worker)
+    await settle()
+    expect(worker.send).toHaveBeenCalledOnce()
+  })
+
   it('replays a previously delivered request when the provider session must be restarted', async () => {
     const { send, replies } = setup({ autoRelay: false })
     send('Plan the work')

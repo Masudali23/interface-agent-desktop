@@ -5,6 +5,7 @@ import type { GitFile, Message, Room } from './types'
 
 export interface RecordedEdit {
   diff: string
+  oldPath?: string
   messageId: string
   author: string
   authorName?: string
@@ -25,18 +26,29 @@ function relative(path: string, root: string): string {
 }
 const text = (value: unknown): string => typeof value === 'string' ? value : ''
 
+// Summarize the history: ordinary edits do not erase an addition or rename.
+function combineStatus(previous: string, next: string): string {
+  if (next === 'deleted') return 'deleted'
+  if (previous === 'deleted' && next === 'added') return 'modified'
+  if (previous === 'added') return 'added'
+  if (next === 'recorded' || (previous === 'renamed' && next === 'modified')) return previous
+  return next
+}
+
 function collect(messages: EditMessage[]): RecordedFile[] {
   const files = new Map<string, RecordedFile>()
   const add = (path: string, diff: string, message: EditMessage, excerpt = false, status?: string, oldPath?: string): void => {
     path = relative(path, message.root)
     const parsed = parseUnifiedDiff(diff, path)
     const entry = files.get(path) ?? { path, status: 'recorded', added: 0, removed: 0, edits: [] }
-    entry.status = status ?? parsed[0]?.status ?? 'recorded'
-    entry.oldPath = oldPath ? relative(oldPath, message.root) : undefined
+    const previousPath = oldPath ? relative(oldPath, message.root) : undefined
+    const editOldPath = previousPath !== path ? previousPath : undefined
+    entry.status = combineStatus(entry.status, status ?? parsed[0]?.status ?? 'recorded')
+    entry.oldPath ??= editOldPath
     entry.binary = parsed.some((file) => file.binary)
     entry.added = (entry.added ?? 0) + parsed.reduce((n, f) => n + f.added, 0)
     entry.removed = (entry.removed ?? 0) + parsed.reduce((n, f) => n + f.removed, 0)
-    entry.edits.push({ diff, messageId: message.id, author: message.author, authorName: message.authorName, createdAt: message.createdAt, excerpt, undone: message.undone })
+    entry.edits.push({ diff, oldPath: editOldPath, messageId: message.id, author: message.author, authorName: message.authorName, createdAt: message.createdAt, excerpt, undone: message.undone })
     files.set(path, entry)
   }
   for (const message of messages) {

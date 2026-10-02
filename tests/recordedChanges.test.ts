@@ -84,4 +84,69 @@ describe('recorded chat changes', () => {
     ownCopy.members = []
     expect(select(ownCopy)[0].path).toBe('/copy/f')
   })
+
+  it('keeps a created file marked added after later Codex updates', () => {
+    const history = room(
+      message([tool([{ path: '/project/new.ts', kind: 'add', diff: 'first\n' }])], { id: 'create', createdAt: 1 }),
+      message([tool([{ path: '/project/new.ts', kind: 'update', diff: '@@ -1 +1 @@\n-first\n+second\n' }])], { id: 'update', createdAt: 2 })
+    )
+    const select = createRecordedChangesSelector()
+    const files = select(history)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({ path: 'new.ts', status: 'added', added: 2, removed: 1 })
+    expect(files[0].edits.map((edit) => edit.messageId)).toEqual(['create', 'update'])
+    expect(select(history, 'update')[0]).toMatchObject({ path: 'new.ts', status: 'modified', added: 1, removed: 1 })
+  })
+
+  it('retains a Codex rename in aggregate metadata without labeling later edits as renames', () => {
+    const history = room(
+      message([tool([{ path: '/project/old.ts', kind: { type: 'update', move_path: '/project/new.ts' }, diff: '@@ -1 +1 @@\n-before\n+renamed\n' }])], { id: 'rename', createdAt: 1 }),
+      message([tool([{ path: '/project/new.ts', kind: 'update', diff: '@@ -1 +1 @@\n-renamed\n+later\n' }])], { id: 'update', createdAt: 2 })
+    )
+    const select = createRecordedChangesSelector()
+    const files = select(history)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({ path: 'new.ts', status: 'renamed', oldPath: 'old.ts', added: 2, removed: 2 })
+    expect(files[0].edits[0].oldPath).toBe('old.ts')
+    expect(files[0].edits[1].oldPath).toBeUndefined()
+    const latest = select(history, 'update')[0]
+    expect(latest.status).toBe('modified')
+    expect(latest.oldPath).toBeUndefined()
+    expect(latest.edits[0].oldPath).toBeUndefined()
+  })
+
+  it('keeps a create-then-delete history visible and marks its final state deleted', () => {
+    const files = createRecordedChangesSelector()(room(
+      message([tool([{ path: '/project/temporary.ts', kind: 'add', diff: 'temporary\n' }])], { id: 'create', createdAt: 1 }),
+      message([tool([{ path: '/project/temporary.ts', kind: 'delete', diff: 'temporary\n' }])], { id: 'delete', createdAt: 2 })
+    ))
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({ path: 'temporary.ts', status: 'deleted', added: 1, removed: 1 })
+    expect(files[0].edits.map((edit) => edit.messageId)).toEqual(['create', 'delete'])
+  })
+
+  it('marks a deleted and recreated existing file modified', () => {
+    const files = createRecordedChangesSelector()(room(
+      message([tool([{ path: '/project/replaced.ts', kind: 'delete', diff: 'original\n' }])], { id: 'delete', createdAt: 1 }),
+      message([tool([{ path: '/project/replaced.ts', kind: 'add', diff: 'replacement\n' }])], { id: 'recreate', createdAt: 2 })
+    ))
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({ path: 'replaced.ts', status: 'modified', added: 1, removed: 1 })
+    expect(files[0].oldPath).toBeUndefined()
+    expect(files[0].edits.map((edit) => edit.messageId)).toEqual(['delete', 'recreate'])
+  })
+
+  it('preserves a snapshot rename when a later snapshot repeats the destination as its old path', () => {
+    const rename = 'diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n'
+    const modify = 'diff --git a/new.ts b/new.ts\n--- a/new.ts\n+++ b/new.ts\n@@ -1 +1 @@\n-before\n+after\n'
+    expect(parseUnifiedDiff(modify)[0].oldPath).toBe('new.ts')
+    const files = createRecordedChangesSelector()(room(
+      message([], { id: 'rename', createdAt: 1, diff: rename }),
+      message([], { id: 'modify', createdAt: 2, diff: modify })
+    ))
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({ path: 'new.ts', status: 'renamed', oldPath: 'old.ts', added: 1, removed: 1 })
+    expect(files[0].edits[0].oldPath).toBe('old.ts')
+    expect(files[0].edits[1].oldPath).toBeUndefined()
+  })
 })

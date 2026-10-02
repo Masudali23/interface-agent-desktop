@@ -154,7 +154,7 @@ export function ChangesPanel({ room }: { room: Room }) {
           }}><Icon name="file" size={13} /></button>
         </div>
         <div className="review-scroll">
-          {recorded ? records.find((file) => file.path === current.path)?.edits.map((edit, index) => <div key={`${edit.messageId}-${index}`}><div className="review-record-label">{edit.authorName ?? edit.author} · {timeOf(edit.createdAt)}{edit.excerpt ? ' · recorded edit excerpt' : ' · turn changes'}{edit.undone ? ' · Undone' : ''}</div>{edit.diff ? <DiffViewer diff={edit.diff} path={current.path} oldPath={current.oldPath} mode={mode} /> : <div className="panel-note">File activity recorded without a text patch.</div>}</div>)
+          {recorded ? records.find((file) => file.path === current.path)?.edits.map((edit, index) => <div key={`${edit.messageId}-${index}`}><div className="review-record-label">{edit.authorName ?? edit.author} · {timeOf(edit.createdAt)}{edit.excerpt ? ' · recorded edit excerpt' : ' · turn changes'}{edit.undone ? ' · Undone' : ''}</div>{edit.diff ? <DiffViewer diff={edit.diff} path={current.path} oldPath={edit.oldPath} mode={mode} /> : <div className="panel-note">File activity recorded without a text patch.</div>}</div>)
             : diff === undefined ? <div className="panel-empty">Loading diff…</div> : diff ? <DiffViewer key={current.path} diff={diff} path={current.path} oldPath={current.oldPath} mode={mode} /> : <div className="panel-note">No text changes; this may be a rename, mode change, or binary file.</div>}
         </div>
       </>}

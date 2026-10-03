@@ -13,9 +13,8 @@ import {
   ShareMenu,
   type MenuItemConstructorOptions
 } from 'electron'
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import type { IfaceApi } from '@shared/api'
 import { parseMentions } from '@shared/mentions'
 import type { AgentsInfo, AppEvent, Attachment, InitialState } from '@shared/types'
@@ -24,6 +23,7 @@ import { chatClipboardMarkdown, chatShareFile, prepareChatExport, saveChatMarkdo
 import { chatExportFilename } from './exportMarkdown'
 import { findBinary, initShellPath, run } from './env'
 import { Files } from './files'
+import { filePreviewResponse, pathInsideRoots, resolveFileLink } from './fileLinks'
 import { fileDiff, listFiles, status as gitStatus } from './git'
 import { RoomManager } from './rooms'
 import { Store } from './store'
@@ -153,18 +153,19 @@ function createWindow(): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      plugins: true,
       spellcheck: true
     }
   })
   w.on('ready-to-show', () => w.show())
   w.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url)
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
   w.webContents.on('will-navigate', (e, url) => {
     if (url === w.webContents.getURL()) return
     e.preventDefault()
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url)
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
   })
   if (process.env.ELECTRON_RENDERER_URL) void w.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void w.loadFile(join(__dirname, '../renderer/index.html'))
@@ -177,17 +178,7 @@ function createWindow(): BrowserWindow {
 // ---------- API ----------
 
 function insideRoots(path: string): boolean {
-  const full = resolve(path)
-  const contains = (root: string, file: string): boolean => {
-    const rel = relative(root, file)
-    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
-  }
-  try {
-    const real = realpathSync(full)
-    return rooms.roots().some((root) => {
-      try { return contains(resolve(root), full) && contains(realpathSync(root), real) } catch { return false }
-    })
-  } catch { return false }
+  return pathInsideRoots(path, rooms.roots())
 }
 
 function roomCwd(roomId: string, memberId?: string): { cwd: string; base?: string } {
@@ -311,6 +302,11 @@ const api: IfaceApi = {
   mergeWorktree: (roomId, memberId) => rooms.mergeWorktree(roomId, memberId),
   discardWorktree: (roomId, memberId) => rooms.discardWorktree(roomId, memberId),
 
+  resolveFileLink: async (roomId, href, memberId, fromFile) => {
+    const room = rooms.get(roomId)
+    if (!room) throw new Error('Session not found')
+    return resolveFileLink(room, href, memberId, fromFile)
+  },
   listDir: (path, showHidden) => files.list(path, showHidden),
   readFile: (path) => files.read(path),
   watchDir: async (path) => files.watch(path),
@@ -361,13 +357,16 @@ const api: IfaceApi = {
     return { settings, agents }
   },
   openPath: async (path) => {
-    if (insideRoots(path)) await shell.openPath(path)
+    if (!insideRoots(path)) throw new Error('That path is missing or outside your open folders.')
+    const error = await shell.openPath(resolve(path))
+    if (error) throw new Error(`The file could not be opened: ${error}`)
   },
   revealPath: async (path) => {
-    if (insideRoots(path)) shell.showItemInFolder(path)
+    if (!insideRoots(path)) throw new Error('That path is missing or outside your open folders.')
+    shell.showItemInFolder(resolve(path))
   },
   openExternal: async (url) => {
-    if (/^https?:\/\//.test(url)) await shell.openExternal(url)
+    if (/^https?:\/\//i.test(url)) await shell.openExternal(url)
   }
 }
 
@@ -381,22 +380,23 @@ function registerIpc(): void {
 
 /**
  * iface://attachment/<roomId>/<file> serves a session's attachments to the UI.
- * iface://file/<encoded absolute path> serves images inside an open folder for the preview.
+ * iface://file/<encoded absolute path> streams images/PDFs inside an open folder.
  */
 function registerProtocol(): void {
-  protocol.handle('iface', (req) => {
-    const url = new URL(req.url)
-    if (url.host === 'file') {
-      const file = resolve(decodeURIComponent(url.pathname.slice(1)))
-      if (!insideRoots(file)) return new Response('Forbidden', { status: 403 })
-      return net.fetch(pathToFileURL(file).toString())
-    }
-    const [roomId, ...rest] = url.pathname.split('/').filter(Boolean)
-    const dir = url.host === 'attachment' && roomId ? rooms.attachmentDir(roomId) : undefined
-    if (!dir || !rest.length) return new Response('Not found', { status: 404 })
-    const file = resolve(dir, decodeURIComponent(rest.join('/')))
-    if (!file.startsWith(resolve(dir) + sep)) return new Response('Forbidden', { status: 403 })
-    return net.fetch(pathToFileURL(file).toString())
+  protocol.handle('iface', async (req) => {
+    try {
+      const url = new URL(req.url)
+      if (url.host === 'file') {
+        const file = decodeURIComponent(url.pathname.slice(1))
+        if (!isAbsolute(file)) return new Response('An absolute file path is required', { status: 400 })
+        return await filePreviewResponse(req, file, rooms.roots(), (url, init) => net.fetch(url, init))
+      }
+      const [roomId, ...rest] = url.pathname.split('/').filter(Boolean)
+      const dir = url.host === 'attachment' && roomId ? rooms.attachmentDir(roomId) : undefined
+      if (!dir || !rest.length) return new Response('Not found', { status: 404 })
+      const file = resolve(dir, decodeURIComponent(rest.join('/')))
+      return await filePreviewResponse(req, file, [dir], (url, init) => net.fetch(url, init))
+    } catch { return new Response('The file URL is invalid', { status: 400 }) }
   })
 }
 

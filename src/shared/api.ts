@@ -10,6 +10,7 @@ import type {
   Attachment,
   FileContent,
   FileEntry,
+  FileLinkTarget,
   GitState,
   InitialState,
   McpServer,
@@ -72,6 +73,7 @@ export interface IfaceApi {
   discardWorktree(roomId: string, memberId: string): Promise<string>
 
   // files
+  resolveFileLink(roomId: string, href: string, memberId?: string, fromFile?: string): Promise<FileLinkTarget>
   listDir(path: string, showHidden?: boolean): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>
   watchDir(path: string): Promise<void>
@@ -135,6 +137,7 @@ export const API_METHODS: Array<keyof IfaceApi> = [
   'gitDiff',
   'mergeWorktree',
   'discardWorktree',
+  'resolveFileLink',
   'listDir',
   'readFile',
   'watchDir',

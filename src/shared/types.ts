@@ -335,6 +335,14 @@ export interface FileContent {
   size: number
 }
 
+export interface FileLinkTarget {
+  path: string
+  line?: number
+  column?: number
+  fragment?: string
+  isDirectory: boolean
+}
+
 export interface GitFile {
   path: string
   status: string

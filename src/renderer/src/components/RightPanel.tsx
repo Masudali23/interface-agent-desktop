@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
-import hljs from 'highlight.js/lib/common'
-import type { FileContent, FileEntry, McpServer, Room } from '@shared/types'
-import { basename, joinPath, languageOf, relative } from '../lib/format'
+import { useEffect, useState, type CSSProperties } from 'react'
+import type { FileEntry, McpServer, Room } from '@shared/types'
+import { joinPath } from '../lib/format'
 import { act, useApp } from '../store'
 import { AgentMark, Icon } from './Icon'
 import { Markdown } from './Markdown'
 import { ChangesPanel } from './ChangesPanel'
+import { FilePreview } from './FilePreview'
 
 function useDir(path: string): FileEntry[] | undefined {
   const version = useApp((s) => s.dirVersion[path] ?? 0)
@@ -80,83 +80,6 @@ function FileTree({ room }: { room: Room }) {
   )
 }
 
-function Preview({ room, path }: { room: Room; path: string }) {
-  const setPreview = useApp((s) => s.setPreview)
-  const parent = path.replace(/[\\/][^\\/]+$/, '')
-  const version = useApp((s) => s.dirVersion[parent] ?? 0)
-  const [file, setFile] = useState<FileContent | { error: string }>()
-  const [source, setSource] = useState(false)
-  const isImage = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(path)
-  const isMd = /\.(md|markdown)$/i.test(path)
-
-  useEffect(() => {
-    void window.iface.watchDir(parent)
-    return () => void window.iface.unwatchDir(parent)
-  }, [parent])
-
-  useEffect(() => {
-    setFile(undefined)
-    if (isImage) return
-    let live = true
-    window.iface
-      .readFile(path)
-      .then((f) => live && setFile(f))
-      .catch((err: Error) => live && setFile({ error: err.message }))
-    return () => {
-      live = false
-    }
-  }, [path, version, isImage])
-
-  const html = useMemo(() => {
-    if (!file || 'error' in file || file.binary || file.content.length > 300000) return undefined
-    const lang = languageOf(path)
-    try {
-      return lang && hljs.getLanguage(lang) ? hljs.highlight(file.content, { language: lang }).value : undefined
-    } catch {
-      return undefined
-    }
-  }, [file, path])
-
-  return (
-    <div className="preview">
-      <div className="preview-head">
-        <button className="icon-btn" onClick={() => setPreview(undefined)} title="Back">
-          <Icon name="back" size={14} />
-        </button>
-        <span className="preview-path" title={path}>
-          {relative(path, room.folder)}
-        </span>
-        {isMd && (
-          <button className="btn tiny" onClick={() => setSource(!source)}>
-            {source ? 'Rendered' : 'Source'}
-          </button>
-        )}
-        <button className="icon-btn" title="Open in default app" onClick={() => void window.iface.openPath(path)}>
-          <Icon name="external" size={14} />
-        </button>
-      </div>
-      <div className="preview-body">
-        {isImage ? (
-          <img className="preview-img" src={`iface://file/${encodeURIComponent(path)}?v=${version}`} alt={basename(path)} />
-        ) : !file ? (
-          <div className="panel-empty">Loading…</div>
-        ) : 'error' in file ? (
-          <div className="panel-empty">{file.error}</div>
-        ) : file.binary ? (
-          <div className="panel-empty">Binary file ({Math.round(file.size / 1024)} KB). Open it in its own app.</div>
-        ) : isMd && !source ? (
-          <div className="preview-md">
-            <Markdown text={file.content} />
-          </div>
-        ) : (
-          <pre className="preview-code">{html ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} /> : <code>{file.content}</code>}</pre>
-        )}
-        {file && !('error' in file) && file.truncated && <div className="panel-note">Showing the first 512 KB.</div>}
-      </div>
-    </div>
-  )
-}
-
 function Tasks({ room }: { room: Room }) {
   const dir = joinPath(room.folder, `.collab/${room.id}`)
   const file = `${dir}/tasks.md`
@@ -183,7 +106,7 @@ function Tasks({ room }: { room: Room }) {
       </div>
       {body ? (
         <div className="tasks-md">
-          <Markdown text={body} />
+          <Markdown text={body} roomId={room.id} fromFile={file} />
         </div>
       ) : (
         <div className="panel-empty">No tasks yet. Ask the agents to plan, for example: "@both split this into tasks on the board, then start."</div>
@@ -280,15 +203,18 @@ export function RightPanel({ room }: { room: Room }) {
   const panel = useApp((s) => s.panel)
   const preview = useApp((s) => s.preview)
   const setPanel = useApp((s) => s.setPanel)
+  const historyCount = useApp((s) => s.previewHistory.length)
+  const historyIndex = useApp((s) => s.previewIndex)
+  const navigate = useApp((s) => s.navigatePreview)
   const width = useApp((s) => s.panelWidth)
   const setWidth = useApp((s) => s.setPanelWidth)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const setFollow = useApp((s) => s.setFollowChanges)
   if (!panel && !preview) return null
-  const title = preview ? 'Preview' : panel === 'tasks' ? 'Task board' : panel === 'changes' ? 'Changes' : panel === 'mcp' ? 'MCP servers' : 'Files'
+  const title = panel === 'tasks' ? 'Task board' : panel === 'changes' ? 'Changes' : panel === 'mcp' ? 'MCP servers' : 'Files'
   return (
     <aside className="right-panel" style={{ '--panel-width': `${width}px`, '--sidebar-width': sidebarOpen ? '264px' : '0px' } as CSSProperties}>
-      <div className="panel-resize no-drag" role="separator" aria-label="Resize review panel" aria-orientation="vertical" tabIndex={0}
+      <div className="panel-resize no-drag" role="separator" aria-label="Resize side panel" aria-orientation="vertical" tabIndex={0}
         onKeyDown={(event) => {
           const visible = event.currentTarget.parentElement?.getBoundingClientRect().width ?? width
           if (event.key === 'ArrowLeft') { event.preventDefault(); setWidth(visible + 40) }
@@ -303,14 +229,19 @@ export function RightPanel({ room }: { room: Room }) {
           handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end)
         }} />
       <div className="panel-head drag">
-        <span className="panel-title">{title}</span>
+        <div className="panel-tabs no-drag" aria-label="Side panel views">
+          {historyCount > 0 && <button className={`panel-tab ${preview ? 'active' : ''}`} onClick={() => navigate(historyIndex)}>Preview</button>}
+          <button className={`panel-tab ${!preview && panel === 'files' ? 'active' : ''}`} onClick={() => setPanel('files')}>Files</button>
+          <button className={`panel-tab ${!preview && panel === 'changes' ? 'active' : ''}`} onClick={() => setPanel('changes')}>Changes</button>
+          {(panel === 'tasks' || panel === 'mcp') && <button className={`panel-tab ${!preview ? 'active' : ''}`} onClick={() => setPanel(panel)}>{title}</button>}
+        </div>
         <button className="icon-btn no-drag" onClick={() => { setPanel(null); if (panel === 'changes') setFollow(false) }} title="Close panel">
           <Icon name="x" size={14} />
         </button>
       </div>
       <div className={`panel-body ${panel === 'changes' && !preview ? 'panel-review' : ''}`}>
         {preview ? (
-          <Preview room={room} path={preview.path} />
+          <FilePreview key={`${room.id}:${preview.path}:${preview.revision ?? 0}`} room={room} target={preview} />
         ) : panel === 'tasks' ? (
           <Tasks room={room} />
         ) : panel === 'changes' ? (

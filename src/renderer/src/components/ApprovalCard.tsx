@@ -77,7 +77,7 @@ function Questions({ block, questions, onAnswer }: { block: Approval; questions:
   )
 }
 
-export function ApprovalCard({ block, who, root, onAnswer }: { block: Approval; who: string; root: string; onAnswer: (d: ApprovalDecision) => void }) {
+export function ApprovalCard({ block, who, root, roomId, memberId, onAnswer }: { block: Approval; who: string; root: string; roomId: string; memberId: string; onAnswer: (d: ApprovalDecision) => void }) {
   const pending = block.status === 'pending'
   const input = (block.input ?? {}) as Input
 
@@ -114,7 +114,7 @@ export function ApprovalCard({ block, who, root, onAnswer }: { block: Approval; 
       </div>
       {block.description && !isPlan && <div className="approval-desc">{block.description}</div>}
       <div className="approval-body">
-        {isPlan ? <Markdown text={str(input.plan)} /> : <ToolDetails name={block.toolName} input={block.input} root={root} />}
+        {isPlan ? <Markdown text={str(input.plan)} roomId={roomId} memberId={memberId} /> : <ToolDetails name={block.toolName} input={block.input} root={root} />}
       </div>
       {pending && (
         <div className="approval-actions">

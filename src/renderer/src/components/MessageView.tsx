@@ -32,16 +32,19 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
 }
 
 function Attachments({ message, roomId }: { message: Message; roomId: string }) {
+  const openLink = useApp((s) => s.openLink)
   if (!message.attachments?.length) return null
   return (
     <div className="msg-attachments">
       {message.attachments.map((a) =>
         a.mime.startsWith('image/') ? (
-          <img key={a.path} src={`iface://attachment/${roomId}/${encodeURIComponent(basename(a.path))}`} alt={a.name} />
+          <button key={a.path} className="attachment-preview" title={`Preview ${a.name}`} onClick={() => void act(() => openLink(a.path, { roomId }))}>
+            <img src={`iface://attachment/${roomId}/${encodeURIComponent(basename(a.path))}`} alt={a.name} />
+          </button>
         ) : (
-          <span key={a.path} className="file-chip">
+          <button key={a.path} className="file-chip" title={`Preview ${a.name}`} onClick={() => void act(() => openLink(a.path, { roomId }))}>
             <Icon name="file" size={12} /> {a.name}
-          </span>
+          </button>
         )
       )}
     </div>
@@ -182,13 +185,13 @@ export const MessageView = memo(function MessageView({ message, room, latestOfAu
         {message.blocks.map((b) => {
           switch (b.kind) {
             case 'text':
-              return b.text.trim() ? <Markdown key={b.id} text={b.text} /> : null
+              return b.text.trim() ? <Markdown key={b.id} text={b.text} roomId={room.id} memberId={message.author === 'user' ? undefined : message.author} /> : null
             case 'thinking':
               return <Thinking key={b.id} text={b.text} live={live && b.id === lastBlock} />
             case 'tool':
               return <ToolCard key={b.id} block={b} root={root} memberId={message.author} messageId={message.id} />
             case 'approval':
-              return <ApprovalCard key={b.id} block={b} who={name} root={root} onAnswer={answer(b.id)} />
+              return <ApprovalCard key={b.id} block={b} who={name} root={root} roomId={room.id} memberId={message.author} onAnswer={answer(b.id)} />
             case 'error':
               return (
                 <div key={b.id} className="error-block">

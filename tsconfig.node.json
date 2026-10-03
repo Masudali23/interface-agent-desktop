@@ -15,5 +15,5 @@
     "baseUrl": ".",
     "paths": { "@shared/*": ["src/shared/*"] }
   },
-  "include": ["electron.vite.config.ts", "src/main/**/*", "src/preload/**/*", "src/shared/**/*", "tests/**/*", "src/renderer/src/lib/format.ts"]
+  "include": ["electron.vite.config.ts", "src/main/**/*", "src/preload/**/*", "src/shared/**/*", "tests/**/*", "src/renderer/src/lib/format.ts", "src/renderer/src/lib/agentPanes.ts", "src/renderer/src/lib/composerDrafts.ts"]
 }

@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { Member, ModelOption, Room } from '@shared/types'
 import { CODEX_MODES, effortLabel, PERMISSION_MODES } from '../lib/options'
 import { act, useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
 
 /** A small menu that opens above (or below) its button and closes on an outside click or Escape. */
-export function Popover({ button, children, className = '', align = 'left' }: { button: (open: boolean, toggle: () => void) => ReactNode; children: (close: () => void) => ReactNode; className?: string; align?: 'left' | 'right' }) {
+export function Popover({ button, children, className = '', align = 'left', portal = false }: { button: (open: boolean, toggle: () => void) => ReactNode; children: (close: () => void) => ReactNode; className?: string; align?: 'left' | 'right'; portal?: boolean }) {
   const [open, setOpen] = useState(false)
   const [place, setPlace] = useState<CSSProperties | undefined>()
   const ref = useRef<HTMLDivElement>(null)
@@ -13,21 +14,24 @@ export function Popover({ button, children, className = '', align = 'left' }: { 
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setOpen(false)
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setOpen(false)
     }
     const onResize = (): void => setOpen(false)
+    const onScroll = (e: Event): void => { if (portal && !menuRef.current?.contains(e.target as Node)) setOpen(false) }
     window.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey)
     window.addEventListener('resize', onResize)
+    if (portal) window.addEventListener('scroll', onScroll, true)
     return () => {
       window.removeEventListener('mousedown', onDown)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('resize', onResize)
+      if (portal) window.removeEventListener('scroll', onScroll, true)
     }
-  }, [open])
+  }, [open, portal])
   // Keep the whole menu on screen: open towards the side with more room and limit its
   // height to that space, so no item (like the first models in a long list) is cut off.
   useLayoutEffect(() => {
@@ -45,6 +49,13 @@ export function Popover({ button, children, className = '', align = 'left' }: { 
     const height = menu.scrollHeight
     const prefersUp = menu.getBoundingClientRect().top < anchor.top
     const up = prefersUp ? height <= above || above >= below : !(height <= below || below >= above)
+    if (portal) {
+      const width = Math.min(menu.getBoundingClientRect().width, window.innerWidth - margin * 2)
+      setPlace({ position: 'fixed', left: Math.max(margin, Math.min(align === 'right' ? anchor.right - width : anchor.left, window.innerWidth - width - margin)), right: 'auto',
+        top: up ? 'auto' : anchor.bottom + gap, bottom: up ? window.innerHeight - anchor.top + gap : 'auto',
+        maxHeight: Math.max(120, up ? above : below), maxWidth: window.innerWidth - margin * 2, zIndex: 1000 })
+      return
+    }
     const next: CSSProperties = up
       ? { top: 'auto', bottom: `calc(100% + ${gap}px)`, maxHeight: Math.max(120, above) }
       : { bottom: 'auto', top: `calc(100% + ${gap}px)`, maxHeight: Math.max(120, below) }
@@ -52,15 +63,12 @@ export function Popover({ button, children, className = '', align = 'left' }: { 
     if (rect.right > window.innerWidth - margin) next.transform = `translateX(${Math.round(window.innerWidth - margin - rect.right)}px)`
     else if (rect.left < margin) next.transform = `translateX(${Math.round(margin - rect.left)}px)`
     setPlace(next)
-  }, [open, place])
+  }, [open, place, portal, align])
+  const menu = open ? <div ref={menuRef} className={`popover menu align-${align}`} style={place ?? { visibility: 'hidden' }}>{children(() => setOpen(false))}</div> : null
   return (
     <div className={`pop-anchor ${className}`} ref={ref}>
       {button(open, () => setOpen(!open))}
-      {open && (
-        <div ref={menuRef} className={`popover menu align-${align}`} style={place ?? { visibility: 'hidden' }}>
-          {children(() => setOpen(false))}
-        </div>
-      )}
+      {portal && menu ? createPortal(menu, document.body) : menu}
     </div>
   )
 }
@@ -79,13 +87,14 @@ function update(room: Room, member: Member, patch: Partial<Member['settings']>):
 }
 
 /** Model picker, like the one in Claude desktop and the Codex app. */
-export function ModelMenu({ room, member, compact = false }: { room: Room; member: Member; compact?: boolean }) {
+export function ModelMenu({ room, member, compact = false, portal = false }: { room: Room; member: Member; compact?: boolean; portal?: boolean }) {
   const models = useMemberModels(member)
   const s = member.settings
   const selected = models.find((m) => m.id === s.model) ?? models.find((m) => (s.model ? false : m.isDefault))
   const efforts = selected?.efforts ?? []
   return (
     <Popover
+      portal={portal}
       button={(open, toggle) => (
         <button className={`pill-btn ${open ? 'on' : ''}`} onClick={toggle} title="Model and effort">
           {compact && <AgentMark provider={member.provider} color={member.color} size={14} />}
@@ -131,13 +140,14 @@ export function ModelMenu({ room, member, compact = false }: { room: Room; membe
 }
 
 /** Permission mode (Claude) or sandbox mode (Codex). */
-export function ModeMenu({ room, member }: { room: Room; member: Member }) {
+export function ModeMenu({ room, member, portal = false }: { room: Room; member: Member; portal?: boolean }) {
   const options = member.provider === 'claude' ? PERMISSION_MODES : CODEX_MODES
   const value = member.provider === 'claude' ? member.settings.permissionMode : member.settings.codexMode
   const current = options.find((o) => o.value === value)
   const risky = value === 'bypassPermissions' || value === 'full'
   return (
     <Popover
+      portal={portal}
       button={(open, toggle) => (
         <button className={`pill-btn ${open ? 'on' : ''} ${risky ? 'risky' : ''}`} onClick={toggle} title={current?.hint}>
           <Icon name="shield" size={12} />

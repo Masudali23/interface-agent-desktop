@@ -902,6 +902,73 @@ pre {
   color: var(--text);
 }
 
+/* Connected panes are an alternate view of the same room. */
+.room-view-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 18px; flex: none; border-bottom: 1px solid var(--border); }
+.room-layout-switch button { display: inline-flex; align-items: center; gap: 6px; }
+.room-connected-note { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 11px; }
+.pane-status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }
+.agent-panes-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(310px, 1fr); gap: 12px; padding: 14px 18px; overflow: auto; overscroll-behavior: contain; }
+.agent-panes-grid.pane-focused { grid-template-columns: minmax(0, 1fr); }
+.agent-pane-slot { min-width: 0; min-height: 0; display: flex; }
+.agent-pane-slot[hidden] { display: none; }
+.agent-pane { width: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); box-shadow: 0 2px 6px #00000004; }
+.agent-pane:focus-within { border-color: var(--pane-color); }
+.agent-pane-head { flex: none; padding: 12px 12px 8px; border-bottom: 1px solid var(--border); border-radius: 14px 14px 0 0; background: var(--surface-2); }
+.agent-pane-identity { display: flex; align-items: center; gap: 9px; }
+.agent-pane-name { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.agent-pane-name strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-pane-name > span { color: var(--text-3); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-pane-status { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--text-2); font-size: 11px; }
+.agent-pane-status > span:nth-child(2) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-pane-status .pane-status-dot { background: var(--text-3); }
+.agent-pane.status-waiting .agent-pane-status { color: var(--warn); }
+.agent-pane.status-error .agent-pane-status { color: var(--danger); }
+.pane-paused { margin-left: auto; color: var(--text-3); font-size: 10px; white-space: nowrap; }
+.agent-pane-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; margin-top: 4px; }
+.agent-pane-controls .pill-btn { font-size: 10px; padding: 3px 5px; max-width: 100%; }
+.agent-pane-controls .pop-anchor { min-width: 0; max-width: 100%; }
+.agent-pane-feed { flex: 1; min-height: 80px; position: relative; }
+.agent-pane-messages { height: 100%; overflow: auto; overscroll-behavior: contain; }
+.agent-pane-messages-inner { padding: 16px 14px 6px; overflow-wrap: anywhere; }
+.agent-pane .msg { margin-bottom: 16px; }
+.agent-pane .agent-head { flex-wrap: wrap; gap: 5px; }
+.agent-pane .agent-head .mark { width: 18px !important; height: 18px !important; }
+.agent-pane .agent-name { font-size: 12px; }
+.agent-pane .agent-head .handle { display: none; }
+.agent-pane .agent-body { padding-left: 0; font-size: 13px; }
+.agent-pane .agent-foot { margin-left: 0; flex-wrap: wrap; }
+.agent-pane .user-bubble { max-width: 96%; font-size: 13px; }
+.agent-pane .execution-note { font-size: 9px; }
+.agent-pane .markdown pre { max-width: 100%; }
+.agent-pane-empty { display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; padding: 14px 12px; color: var(--text-2); font-size: 12px; gap: 8px; }
+.agent-pane-empty p { margin: 0; max-width: 260px; color: var(--text-3); line-height: 1.5; }
+.pane-handoff { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+.pane-handoff summary { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; padding: 9px; font-size: 11px; color: var(--text-2); }
+.pane-handoff summary svg { flex: none; margin-top: 2px; }
+.pane-handoff summary small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.pane-handoff > .msg { padding: 10px; }
+.pane-jump { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 5px 10px; white-space: nowrap; border: 1px solid var(--border-strong); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); color: var(--text-2); font-size: 11px; }
+.agent-pane .composer-scoped { padding: 0 10px 10px; max-width: none; margin: 0; }
+.agent-pane .composer-box { padding: 7px 9px; border-radius: 10px; }
+.agent-pane .composer textarea { font-size: 12px; max-height: 100px; }
+.pane-compose-label { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; margin-bottom: 4px; color: var(--text-2); }
+.pane-compose-label span { color: var(--text-3); }
+.agent-pane .composer-bar { margin-top: 2px; gap: 4px; }
+.agent-pane .composer-bar .foot-spacer { display: block; }
+.agent-pane .send { width: 26px; height: 26px; border-radius: 8px; }
+.agent-pane .btn.stop { font-size: 11px; padding: 3px 6px; }
+.room-compose-label { display: flex; align-items: center; gap: 6px; width: 100%; max-width: 876px; padding: 2px 28px 7px; margin: 0 auto; color: var(--text-2); font-size: 11px; flex: none; }
+.room-compose-label span { color: var(--text-3); margin-left: auto; font-size: 10px; }
+.room-panes > .composer textarea { max-height: 110px; }
+.room-panes > .composer .composer-members { display: none; }
+@container (max-width: 720px) {
+  .agent-panes-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(380px, 1fr); padding: 10px; gap: 10px; }
+  .room-view-bar { padding: 8px 10px; flex-wrap: wrap; }
+  .room-connected-note { font-size: 10px; }
+  .room-compose-label { padding: 2px 12px 6px; }
+  .room-compose-label span { display: none; }
+}
+
 /* ---------- messages ---------- */
 
 .msg {
@@ -1587,6 +1654,7 @@ pre {
   gap: 6px;
   margin-bottom: 8px;
 }
+.composer-saving { color: var(--text-3); font-size: 11px; padding: 2px 0 5px; }
 .composer-bar {
   display: flex;
   align-items: center;

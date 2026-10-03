@@ -8,6 +8,8 @@ import { AgentMark, Icon, type IconName } from './Icon'
 import { ContextRing, Popover } from './MemberControls'
 import { MessageView } from './MessageView'
 import { ShareChat } from './ShareChat'
+import { AgentPanes } from './AgentPanes'
+import { readRoomLayout, saveRoomLayout, type RoomLayout } from '../lib/agentPanes'
 
 function AgentPill({ room, member }: { room: Room; member: Member }) {
   const runtime = useApp((s) => s.statuses[room.id]?.[member.id])
@@ -118,7 +120,7 @@ function RoomMenu({ room }: { room: Room }) {
                 <input type="checkbox" checked={room.autoRelay} onChange={(e) => void window.iface.updateRoom(room.id, { autoRelay: e.target.checked })} />
                 <span>
                   Automatic hand-offs
-                  <small>When an agent ends with "→ @other", that agent starts right away</small>
+                  <small>When an agent ends with "→ @other", the hand-off joins that agent's work or starts its next turn</small>
                 </span>
               </label>
               <label className="inline-number">
@@ -149,6 +151,19 @@ export function RoomView({ room }: { room: Room }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const team = room.members.length > 1
+  const [layoutState, setLayoutState] = useState(() => ({ roomId: room.id, layout: readRoomLayout(room.id) }))
+  const layout = layoutState.roomId === room.id ? layoutState.layout : readRoomLayout(room.id)
+  const panes = team && layout === 'panes'
+  const focusMessageId = useApp((s) => s.focusMessageId)
+  const setLayout = (next: RoomLayout): void => {
+    setLayoutState({ roomId: room.id, layout: next })
+    saveRoomLayout(room.id, next)
+  }
+
+  // Search results may belong to any agent, including one hidden by pane focus.
+  useLayoutEffect(() => {
+    if (focusMessageId && panes) setLayout('chat')
+  }, [focusMessageId, room.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const panels: Array<{ id: Panel; label: string; icon: IconName }> = [
     { id: 'files', label: 'Files', icon: 'folder' },
@@ -187,7 +202,7 @@ export function RoomView({ room }: { room: Room }) {
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [room.messages, room.id])
+  }, [room.messages, room.id, panes])
 
   // Content also grows without a new message (images loading, code highlighting, the
   // composer getting taller): keep following the bottom whenever the user is there.
@@ -201,7 +216,7 @@ export function RoomView({ room }: { room: Room }) {
     observer.observe(el)
     if (el.firstElementChild) observer.observe(el.firstElementChild)
     return () => observer.disconnect()
-  }, [room.id])
+  }, [room.id, panes])
 
   const examples = team
     ? [
@@ -212,7 +227,7 @@ export function RoomView({ room }: { room: Room }) {
     : ['Explain how this project is structured.', 'Find and fix a bug in this project.', room.members[0].provider === 'codex' ? '/review' : '/init']
 
   return (
-    <div className="room">
+    <div className={`room ${panes ? 'room-panes' : ''}`}>
       <header className="room-head drag">
         <div className="room-head-main">
           <Title room={room} />
@@ -240,7 +255,14 @@ export function RoomView({ room }: { room: Room }) {
           </button>
         </div>
       </header>
-      <div className="messages" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
+      {team && <div className="room-view-bar">
+        <div className="segmented room-layout-switch" role="group" aria-label="Conversation layout">
+          <button className={!panes ? 'on' : ''} aria-pressed={!panes} onClick={() => setLayout('chat')}><Icon name="list" size={13} /> Shared chat</button>
+          <button className={panes ? 'on' : ''} aria-pressed={panes} onClick={() => setLayout('panes')}><Icon name="users" size={13} /> Agent panels</button>
+        </div>
+        <span className="room-connected-note"><span className="pane-status-dot" />{panes ? 'One room · shared context' : `${room.members.length} connected agents`}</span>
+      </div>}
+      {panes ? <AgentPanes key={room.id} room={room} latest={latest} busy={busy} /> : <div className="messages" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
         <div className="messages-inner">
           {room.messages.length === 0 && (
             <div className="room-empty">
@@ -272,7 +294,8 @@ export function RoomView({ room }: { room: Room }) {
             <MessageView key={m.id} message={m} room={room} latestOfAuthor={latest.has(m.id)} roomBusy={busy} />
           ))}
         </div>
-      </div>
+      </div>}
+      {panes && <div className="room-compose-label"><Icon name="users" size={13} /> Message the room<span>Or message one agent in its panel above</span></div>}
       <Composer room={room} busy={busy} />
     </div>
   )

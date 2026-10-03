@@ -161,6 +161,16 @@ describe('forwarding', () => {
     expect(rules).toContain('→ @work:')
     expect(rules).not.toContain('→ @claude:')
   })
+
+  it('distinguishes active-turn feedback from a new turn and preserves the existing objective', () => {
+    const text = formatUpdate(team.members[1], [msg({ text: 'Use the revised API', to: ['b'] })], team, false, 'feedback')
+    expect(text).toContain('Use the revised API')
+    expect(text).toContain('Incorporate them now')
+    expect(text).toContain('preserve the original objective')
+    expect(text).toContain('Do not repeat work already reported complete')
+    expect(text).not.toContain("It's your turn")
+    expect(systemPrompt(team.members[1], team)).toContain('Messages arriving while you work are feedback or a continuation')
+  })
 })
 
 describe('usage', () => {

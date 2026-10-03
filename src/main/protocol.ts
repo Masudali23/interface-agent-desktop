@@ -34,6 +34,7 @@ export function systemPrompt(member: Member, room: Room): string | undefined {
     `- Shared task board: ${room.folder}/${dir}/tasks.md. Keep it current when you plan or split work. One task per line: "- [ ] description — owner: @handle — files: …". Tick it "- [x]" when done.`,
     '- Split work by file ownership. Do not edit files that a task assigns to someone else unless asked. When the user says who does which part, do only your part.',
     '- When you ask another agent for something, be specific: what to do, which files, and how to report back.',
+    '- Messages arriving while you work are feedback or a continuation of your current task. Incorporate them promptly, preserve the original objective unless the user changes it, and complete the combined work before handing off. Do not repeat work already reported complete.',
     `- Available participants: ${room.members.filter((candidate) => activeMemberIds(room).includes(candidate.id)).map((candidate) => `@${candidate.handle} (model=${candidate.settings.model || 'default'}, effort=${candidate.settings.effort || 'default'})`).join(', ')}. Unticked agents require an explicit user action to run.`,
     '- Avoid duplicate investigation and repeated full transcripts. Delegate bounded tasks, share concise findings with file references, and run relevant checks before declaring completion.',
     `- Available model IDs and effort options are recorded in ${room.folder}/${dir}/models.json. Choose a suitable smaller model/lower effort for straightforward delegated work and a stronger model for difficult work or final review. Do not assume model prices from names.`,
@@ -105,7 +106,7 @@ export function pendingFor(memberId: string, messages: Message[]): Message[] {
  * What the agent is sent for its turn. In a solo room this is just what you typed,
  * exactly as if you typed it into Claude Code or Codex.
  */
-export function formatUpdate(member: Member, pending: Message[], room: Room, includeRules = false): string {
+export function formatUpdate(member: Member, pending: Message[], room: Room, includeRules = false, mode: 'turn' | 'feedback' = 'turn'): string {
   if (!isTeam(room)) {
     return pending
       .filter((m) => m.author === 'user')
@@ -123,7 +124,9 @@ export function formatUpdate(member: Member, pending: Message[], room: Room, inc
     } else parts.push(renderMessage(m, room), '')
   }
   parts.push('</room-update>', '')
-  parts.push(`It's your turn, @${member.handle}. Respond to the latest message addressed to you, then end with your routing line.`)
+  parts.push(mode === 'feedback'
+    ? `@${member.handle}, these messages arrived while you were working. Treat them as feedback or a continuation of your current task. Incorporate them now, preserve the original objective unless the user changes it, and finish the combined work before your final reply. Do not repeat work already reported complete. End only your final reply with your routing line.`
+    : `It's your turn, @${member.handle}. Respond to the latest message addressed to you while preserving any unfinished objective, then end with your routing line.`)
   return parts.join('\n')
 }
 

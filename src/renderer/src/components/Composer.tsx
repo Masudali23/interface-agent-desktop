@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
 import { parseMentions } from '@shared/mentions'
-import { activeMemberIds, defaultRecipients, type Attachment, type Room, type SlashCommand } from '@shared/types'
+import { activeMemberIds, type Room, type SlashCommand } from '@shared/types'
 import { act, useApp } from '../store'
 import { AgentMark, Icon } from './Icon'
 import { ContextRing, ModelMenu, ModeMenu } from './MemberControls'
+import { composerDraftKey, composerRecipients } from '../lib/agentPanes'
+import { ComposerDrafts } from '../lib/composerDrafts'
 
-const drafts = new Map<string, string>()
+const drafts = new ComposerDrafts()
+
+interface ComposerProps { room: Room; busy: boolean; memberId?: string }
 
 interface Suggestion {
   key: string
@@ -27,14 +31,23 @@ function activeToken(text: string, caret: number): { start: number; token: strin
   return { start, token: m[2] }
 }
 
-export function Composer({ room, busy }: { room: Room; busy: boolean }) {
+export function Composer(props: ComposerProps) {
+  return <ComposerInput key={composerDraftKey(props.room.id, props.memberId)} {...props} />
+}
+
+function ComposerInput({ room, busy, memberId }: ComposerProps) {
   const team = room.members.length > 1
+  const member = room.members.find((m) => m.id === memberId)
+  const draftKey = composerDraftKey(room.id, memberId)
   const meta = useApp((s) => s.meta)
   const setError = useApp((s) => s.setError)
 
-  const [text, setText] = useState(drafts.get(room.id) ?? '')
+  const { text, attachments, saving } = useSyncExternalStore(
+    useCallback((listener) => drafts.subscribe(draftKey, listener), [draftKey]),
+    useCallback(() => drafts.get(draftKey), [draftKey])
+  )
+  const setText = (next: string): void => drafts.setText(draftKey, next)
   const [caret, setCaret] = useState(0)
-  const [attachments, setAttachments] = useState<Attachment[]>([])
   const [menuIndex, setMenuIndex] = useState(0)
   const [files, setFiles] = useState<string[]>([])
   const [dragging, setDragging] = useState(false)
@@ -43,23 +56,20 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
 
   const memberIds = room.members.map((m) => m.id)
   const targets = activeMemberIds(room)
-  const mentioned = team ? parseMentions(text, room.members) : undefined
-  const effective = mentioned ?? defaultRecipients(room)
+  const mentioned = team && !memberId ? parseMentions(text, room.members) : undefined
+  const effective = composerRecipients(room, text, memberId)
 
   useEffect(() => {
-    setText(drafts.get(room.id) ?? '')
-    setAttachments([])
-    ref.current?.focus()
-  }, [room.id])
+    if (!memberId) ref.current?.focus()
+  }, [memberId])
 
   useEffect(() => {
-    drafts.set(room.id, text)
     const el = ref.current
     if (el) {
       el.style.height = 'auto'
-      el.style.height = `${Math.min(el.scrollHeight, 320)}px`
+      el.style.height = `${Math.min(el.scrollHeight, memberId ? 100 : 320)}px`
     }
-  }, [text, room.id])
+  }, [text, memberId])
 
   const token = activeToken(text, caret)
 
@@ -91,7 +101,7 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
       }
       return out.slice(0, 10)
     }
-    const people: Suggestion[] = team
+    const people: Suggestion[] = team && !memberId
       ? [
           ...room.members
             .filter((m) => m.handle.toLowerCase().startsWith(q) || m.name.toLowerCase().startsWith(q))
@@ -101,7 +111,7 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
       : []
     const fileItems = files.slice(0, 8).map((f) => ({ key: `f-${f}`, insert: `@${f} `, label: f, kind: 'file' as const }))
     return [...people, ...fileItems].slice(0, 12)
-  }, [token, files, meta, room.members, team, effective.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, files, meta, room.members, team, memberId, effective.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const choose = (s: Suggestion): void => {
     if (!token) return
@@ -117,24 +127,26 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
   }
 
   const addFiles = async (list: FileList | File[]): Promise<void> => {
-    for (const file of Array.from(list)) {
+    const files = Array.from(list)
+    drafts.startSaving(draftKey, files.length)
+    for (const file of files) {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer())
         const att = await window.iface.saveAttachment(room.id, file.name || `pasted-${Date.now()}.png`, bytes)
-        setAttachments((cur) => [...cur, att])
+        drafts.addAttachment(draftKey, att)
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        drafts.finishSaving(draftKey)
       }
     }
   }
 
   const send = async (): Promise<void> => {
-    const t = text.trim()
-    if (!t && !attachments.length) return
-    setText('')
-    setAttachments([])
-    drafts.delete(room.id)
-    await act(() => window.iface.send(room.id, { text: t || '(see attachment)', to: effective, attachments }))
+    if (!effective.length) return
+    const draft = drafts.take(draftKey)
+    if (!draft) return
+    await act(() => window.iface.send(room.id, { text: draft.text.trim() || '(see attachment)', to: effective, attachments: draft.attachments }))
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -159,7 +171,7 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
       e.preventDefault()
       void send()
     } else if (e.key === 'Escape' && busy) {
-      void window.iface.stop(room.id)
+      void window.iface.stop(room.id, memberId)
     }
   }
 
@@ -191,7 +203,7 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
 
   return (
     <div
-      className={`composer ${dragging ? 'dragging' : ''}`}
+      className={`composer ${memberId ? 'composer-scoped' : ''} ${dragging ? 'dragging' : ''}`}
       onDragOver={(e) => {
         e.preventDefault()
         setDragging(true)
@@ -222,7 +234,8 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
         </div>
       )}
       <div className="composer-box">
-        {team && (
+        {member && <div className="pane-compose-label">To @{member.handle}<span>Visible to the room</span></div>}
+        {team && !memberId && (
           <div className="targets">
             <span className="targets-label">{room.dispatch === 'lead' && !mentioned ? 'Team' : 'To'}</span>
             {room.members.map((m) => {
@@ -260,25 +273,27 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
             )}
           </div>
         )}
-        {team && room.dispatch === 'lead' && !mentioned && <div className="dispatch-hint">Starts with {names.join(', ')}. Ticked agents are available for delegation.</div>}
+        {team && !memberId && room.dispatch === 'lead' && !mentioned && <div className="dispatch-hint">Starts with {names.join(', ')}. Ticked agents are available for delegation.</div>}
         {attachments.length > 0 && (
           <div className="composer-attachments">
             {attachments.map((a) => (
               <span key={a.path} className="file-chip">
                 <Icon name={a.mime.startsWith('image/') ? 'image' : 'file'} size={12} />
                 {a.name}
-                <button onClick={() => setAttachments((cur) => cur.filter((x) => x.path !== a.path))} title="Remove">
+                <button onClick={() => drafts.removeAttachment(draftKey, a.path)} title="Remove">
                   <Icon name="x" size={11} />
                 </button>
               </span>
             ))}
           </div>
         )}
+        {saving > 0 && <div className="composer-saving" role="status">Saving {saving === 1 ? 'attachment' : `${saving} attachments`}…</div>}
         <textarea
           ref={ref}
           value={text}
           rows={1}
-          placeholder={team ? `Message ${names.join(', ')}…  (@ to mention an agent or file, / for commands)` : `Message ${names[0] ?? ''}…  (@ for files, / for commands)`}
+          aria-label={member ? `Message ${member.name}` : 'Message the room'}
+          placeholder={member ? `Message ${member.name}…` : team ? `Message ${names.join(', ')}…  (@ to mention an agent or file, / for commands)` : `Message ${names[0] ?? ''}…  (@ for files, / for commands)`}
           onChange={(e) => {
             setText(e.target.value)
             setCaret(e.target.selectionStart)
@@ -302,20 +317,20 @@ export function Composer({ room, busy }: { room: Room; busy: boolean }) {
               e.target.value = ''
             }}
           />
-          <div className="composer-members">{room.members.map((m) => (
+          {!memberId && <div className="composer-members">{room.members.map((m) => (
             <span key={m.id} className="member-controls">
               <ModelMenu room={room} member={m} compact={team} />
               <ModeMenu room={room} member={m} />
               {!team && <ContextRing room={room} member={m} />}
             </span>
-          ))}</div>
+          ))}</div>}
           <span className="foot-spacer" />
           {busy && (
-            <button className="btn stop" onClick={() => void window.iface.stop(room.id)} title="Stop (Esc)">
+            <button className="btn stop" onClick={() => void window.iface.stop(room.id, memberId)} title={member ? `Stop ${member.name} (Esc)` : 'Stop (Esc)'}>
               <Icon name="stop" size={12} /> Stop
             </button>
           )}
-          <button className="send" disabled={!text.trim() && !attachments.length} onClick={() => void send()} title="Send (Enter)">
+          <button className="send" disabled={saving > 0 || (!text.trim() && !attachments.length)} onClick={() => void send()} title={saving > 0 ? 'Waiting for attachments to finish saving' : 'Send (Enter)'}>
             <Icon name="send" size={16} />
           </button>
         </div>

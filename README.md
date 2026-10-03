@@ -7,13 +7,16 @@ The app launches the installed agent CLIs and uses their authentication, model a
 ## What it does
 
 - **Accounts and sessions:** multiple accounts, model and effort controls, selected team recipients, usage displays, permission prompts, session search and a built-in terminal.
-- **Feedback while agents work:** new messages can steer an active turn where the connector supports it. Messages are queued when immediate steering is unavailable.
+- **Feedback while agents work:** both your messages and agent handoffs join an active turn where the connector supports it, so corrections are considered during the current task. Accepted updates are recorded once rather than repeated as a later turn. Messages queue when the connector cannot accept them; slash commands and handoffs requesting a different model/effort run separately.
+- **Connected agent panels:** team rooms start in **Shared chat**. Switch to **Agent panels** to see one scrolling workspace per member, with its own status, model controls and composer. Pane messages go to that agent only (even when their text mentions someone else) and remain visible in the shared room. The room composer keeps its usual recipient selection and @mentions. Expand one panel to focus, or switch back at any time; drafts and attachments survive view changes. The layout preference is saved per room on this device.
 - **Team coordination:** a lead can delegate bounded tasks to selected agents, with optional model/effort choices for delegated turns. Saved agent preferences remain available for later turns. Teams share a task board and can use separate Git worktrees.
 - **Changes:** live Git status and file-by-file diffs, file previews, and worktree review. The Changes panel refreshes while visible; filesystem watching also updates the file tree. Binary files and preview limits are shown instead of treating every file as text.
 - **Conversation sharing:** copy recorded chat as Markdown, save a Markdown export or an archive with recorded attachments, and use the native sharing menu on macOS. Exports contain recorded information; they cannot reconstruct unrecorded agent internals or missing attachments.
 - **Retry and undo:** retry replies, edit earlier messages, and undo supported file changes. Coverage depends on the connector, available checkpoints and whether the folder is a Git repository.
 
 This is an actively developed personal desktop app. macOS and Ubuntu share the source and CI checks, but window behavior, authentication flows, native dependencies and packaging still need testing on each OS. Builds are not presented as fully equivalent or commercially signed releases.
+
+Live feedback reaches Claude Code and Codex app-server at the next point their running turn can accept input; it does not cancel a tool already executing. The older Codex `exec` fallback cannot receive mid-turn input and keeps it queued. Agent panels use the same room history, sessions, task board and delivery rules as shared chat; they are connected panes inside the app, not separate operating-system windows. Incoming agent handoffs appear in the receiving pane, and **Shared chat** shows the full team history.
 
 ## Develop locally
 

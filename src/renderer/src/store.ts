@@ -13,13 +13,14 @@ import type {
   SearchHit
 } from '@shared/types'
 import { terminalBus } from './lib/bus'
+import { searchBlocked } from './lib/chrome'
 import { latestFileActivity } from '@shared/changes'
 import { linkKind } from '@shared/links'
 
 /** Stable empty values for selectors (a new [] on every read would re-render forever). */
 export const EMPTY: never[] = []
 
-export type Panel = 'files' | 'tasks' | 'changes' | 'mcp'
+export type Panel = 'session' | 'files' | 'tasks' | 'changes' | 'mcp'
 export type SettingsTab = 'accounts' | 'defaults' | 'agents' | 'app'
 export interface PreviewTarget {
   path: string
@@ -59,6 +60,7 @@ interface State {
   dirVersion: Record<string, number>
   error?: string
   notice?: string
+  searchOpen: boolean
   searchQuery: string
   searchHits: SearchHit[]
   focusMessageId?: string
@@ -81,6 +83,7 @@ interface State {
   setTerminal(open: boolean): void
   setError(error: string | undefined): void
   setNotice(notice: string | undefined): void
+  setSearchOpen(open: boolean): void
   search(query: string): Promise<void>
 }
 
@@ -199,10 +202,7 @@ export const useApp = create<State>((set, get) => {
         if (e.action === 'settings') get().openSettings()
         if (e.action === 'toggle-sidebar') set({ sidebarOpen: !s.sidebarOpen })
         if (e.action === 'toggle-terminal') set({ terminalOpen: !s.terminalOpen })
-        if (e.action === 'search') {
-          set({ sidebarOpen: true })
-          setTimeout(() => document.getElementById('sidebar-search')?.focus(), 50)
-        }
+        if (e.action === 'search') get().setSearchOpen(true)
         return
       }
     }
@@ -227,6 +227,7 @@ export const useApp = create<State>((set, get) => {
     settingsTab: 'accounts',
     terminalOpen: false,
     dirVersion: {},
+    searchOpen: false,
     searchQuery: '',
     searchHits: [],
 
@@ -275,6 +276,7 @@ export const useApp = create<State>((set, get) => {
       set({ mode })
     },
     openNewSession(folder, kind) {
+      get().setSearchOpen(false)
       set((s) => ({ newSession: { folder, kind: kind ?? s.mode } }))
     },
     closeNewSession() {
@@ -334,6 +336,7 @@ export const useApp = create<State>((set, get) => {
       set({ sidebarOpen })
     },
     openSettings(tab) {
+      get().setSearchOpen(false)
       set((s) => ({ settingsOpen: true, settingsTab: tab ?? s.settingsTab }))
     },
     closeSettings() {
@@ -348,6 +351,14 @@ export const useApp = create<State>((set, get) => {
     setNotice(notice) {
       set({ notice })
       if (notice) setTimeout(() => get().notice === notice && set({ notice: undefined }), 5000)
+    },
+    setSearchOpen(open) {
+      if (open) {
+        if (!searchBlocked(get())) set({ searchOpen: true })
+      } else if (get().searchOpen) {
+        ++searchSeq
+        set({ searchOpen: false, searchQuery: '', searchHits: [] })
+      }
     },
     async search(query) {
       const seq = ++searchSeq

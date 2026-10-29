@@ -20,7 +20,12 @@ export function Popover({ button, children, className = '', align = 'left', port
       if (e.key === 'Escape') setOpen(false)
     }
     const onResize = (): void => setOpen(false)
-    const onScroll = (e: Event): void => { if (portal && !menuRef.current?.contains(e.target as Node)) setOpen(false) }
+    // A portaled menu is placed once, so it closes when its button scrolls away. Scrolls that
+    // leave the button where it is, like the transcript following a streaming reply, don't count.
+    const onScroll = (e: Event): void => {
+      const target = e.target
+      if (portal && target instanceof Node && !menuRef.current?.contains(target) && !!ref.current && target.contains(ref.current)) setOpen(false)
+    }
     window.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey)
     window.addEventListener('resize', onResize)
@@ -87,7 +92,7 @@ function update(room: Room, member: Member, patch: Partial<Member['settings']>):
 }
 
 /** Model picker, like the one in Claude desktop and the Codex app. */
-export function ModelMenu({ room, member, compact = false, portal = false }: { room: Room; member: Member; compact?: boolean; portal?: boolean }) {
+export function ModelMenu({ room, member, compact = false, portal = false, align = 'left' }: { room: Room; member: Member; compact?: boolean; portal?: boolean; align?: 'left' | 'right' }) {
   const models = useMemberModels(member)
   const s = member.settings
   const selected = models.find((m) => m.id === s.model) ?? models.find((m) => (s.model ? false : m.isDefault))
@@ -95,12 +100,13 @@ export function ModelMenu({ room, member, compact = false, portal = false }: { r
   return (
     <Popover
       portal={portal}
+      align={align}
       button={(open, toggle) => (
         <button className={`pill-btn ${open ? 'on' : ''}`} onClick={toggle} title="Model and effort">
           {compact && <AgentMark provider={member.provider} color={member.color} size={14} />}
           <span>{modelLabel(models, s.model)}</span>
           {s.effort ? <span className="muted">· {effortLabel(s.effort)}</span> : null}
-          <Icon name="chevronDown" size={11} />
+          <Icon name="chevronDown" size={11} className="pill-caret" />
         </button>
       )}
     >
@@ -150,9 +156,9 @@ export function ModeMenu({ room, member, portal = false }: { room: Room; member:
       portal={portal}
       button={(open, toggle) => (
         <button className={`pill-btn ${open ? 'on' : ''} ${risky ? 'risky' : ''}`} onClick={toggle} title={current?.hint}>
-          <Icon name="shield" size={12} />
+          <Icon name="shield" size={12} className="pill-icon" />
           <span>{current?.label}</span>
-          <Icon name="chevronDown" size={11} />
+          <Icon name="chevronDown" size={11} className="pill-caret" />
         </button>
       )}
     >

@@ -18,6 +18,7 @@ import type {
   Message,
   NewRoomInput,
   Provider,
+  QueuedDraft,
   Room,
   RoomUpdate,
   SearchHit,
@@ -42,7 +43,12 @@ export interface IfaceApi {
 
   // conversation
   send(roomId: string, input: SendInput): Promise<Message | undefined>
-  stop(roomId: string, memberId?: string): Promise<void>
+  /** Stops the turn and takes back messages queued for it, so the composer can restore them. */
+  stop(roomId: string, memberId?: string): Promise<QueuedDraft[]>
+  /** Removes a queued message that has not started; returns it for editing. */
+  cancelQueued(roomId: string, messageId: string): Promise<QueuedDraft | undefined>
+  /** Delivers a queued message now, as feedback to the running turn. */
+  sendQueuedNow(roomId: string, messageId: string): Promise<void>
   answer(roomId: string, messageId: string, blockId: string, decision: ApprovalDecision): Promise<void>
   continueHandoff(roomId: string, messageId: string): Promise<void>
   retry(roomId: string, messageId: string): Promise<void>
@@ -113,6 +119,8 @@ export const API_METHODS: Array<keyof IfaceApi> = [
   'removeMember',
   'send',
   'stop',
+  'cancelQueued',
+  'sendQueuedNow',
   'answer',
   'continueHandoff',
   'retry',

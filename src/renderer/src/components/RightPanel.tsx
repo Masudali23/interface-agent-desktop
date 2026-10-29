@@ -6,6 +6,7 @@ import { AgentMark, Icon } from './Icon'
 import { Markdown } from './Markdown'
 import { ChangesPanel } from './ChangesPanel'
 import { FilePreview } from './FilePreview'
+import { SessionOverview } from './SessionOverview'
 
 function useDir(path: string): FileEntry[] | undefined {
   const version = useApp((s) => s.dirVersion[path] ?? 0)
@@ -211,7 +212,7 @@ export function RightPanel({ room }: { room: Room }) {
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const setFollow = useApp((s) => s.setFollowChanges)
   if (!panel && !preview) return null
-  const title = panel === 'tasks' ? 'Task board' : panel === 'changes' ? 'Changes' : panel === 'mcp' ? 'MCP servers' : 'Files'
+  const extra = panel === 'tasks' ? 'Task board' : panel === 'mcp' ? 'MCP servers' : undefined
   return (
     <aside className="right-panel" style={{ '--panel-width': `${width}px`, '--sidebar-width': sidebarOpen ? '264px' : '0px' } as CSSProperties}>
       <div className="panel-resize no-drag" role="separator" aria-label="Resize side panel" aria-orientation="vertical" tabIndex={0}
@@ -231,9 +232,10 @@ export function RightPanel({ room }: { room: Room }) {
       <div className="panel-head drag">
         <div className="panel-tabs no-drag" aria-label="Side panel views">
           {historyCount > 0 && <button className={`panel-tab ${preview ? 'active' : ''}`} onClick={() => navigate(historyIndex)}>Preview</button>}
+          <button className={`panel-tab ${!preview && panel === 'session' ? 'active' : ''}`} onClick={() => setPanel('session')}>Overview</button>
           <button className={`panel-tab ${!preview && panel === 'files' ? 'active' : ''}`} onClick={() => setPanel('files')}>Files</button>
           <button className={`panel-tab ${!preview && panel === 'changes' ? 'active' : ''}`} onClick={() => setPanel('changes')}>Changes</button>
-          {(panel === 'tasks' || panel === 'mcp') && <button className={`panel-tab ${!preview ? 'active' : ''}`} onClick={() => setPanel(panel)}>{title}</button>}
+          {panel && extra && <button className={`panel-tab ${!preview ? 'active' : ''}`} onClick={() => setPanel(panel)}>{extra}</button>}
         </div>
         <button className="icon-btn no-drag" onClick={() => { setPanel(null); if (panel === 'changes') setFollow(false) }} title="Close panel">
           <Icon name="x" size={14} />
@@ -242,6 +244,8 @@ export function RightPanel({ room }: { room: Room }) {
       <div className={`panel-body ${panel === 'changes' && !preview ? 'panel-review' : ''}`}>
         {preview ? (
           <FilePreview key={`${room.id}:${preview.path}:${preview.revision ?? 0}`} room={room} target={preview} />
+        ) : panel === 'session' ? (
+          <SessionOverview room={room} />
         ) : panel === 'tasks' ? (
           <Tasks room={room} />
         ) : panel === 'changes' ? (

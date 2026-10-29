@@ -97,9 +97,12 @@ export function renderMessage(m: Message, room: Room, withTime = false): string 
   return lines.join('\n')
 }
 
-/** Messages this member has not been shown yet: everything finished and not its own. */
+/**
+ * Messages this member has not been shown yet: everything finished and not its own.
+ * Messages queued for later wait for their own turn and are not shown to anyone yet.
+ */
 export function pendingFor(memberId: string, messages: Message[]): Message[] {
-  return messages.filter((m) => m.author !== memberId && m.status !== 'streaming' && !(m.deliveredTo ?? []).includes(memberId))
+  return messages.filter((m) => m.author !== memberId && m.status !== 'streaming' && !m.queued && !(m.deliveredTo ?? []).includes(memberId))
 }
 
 /**

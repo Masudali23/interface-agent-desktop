@@ -53,6 +53,16 @@ export class ComposerDrafts {
     this.update(key, { ...draft, saving: Math.max(0, draft.saving - 1) })
   }
 
+  /** Puts taken-back messages (cancelled or stopped queue items) into the draft, after any text there. */
+  restore(key: string, items: Array<{ text: string; attachments: Attachment[] }>): void {
+    if (!items.length) return
+    const draft = this.get(key)
+    const text = [draft.text.trimEnd(), ...items.map((item) => item.text.trim())].filter(Boolean).join('\n\n')
+    const seen = new Set(draft.attachments.map((attachment) => attachment.path))
+    const attachments = [...draft.attachments, ...items.flatMap((item) => item.attachments).filter((attachment) => !seen.has(attachment.path) && seen.add(attachment.path))]
+    this.update(key, { ...draft, text, attachments })
+  }
+
   /** Atomically consume a ready draft; files still saving must join this message. */
   take(key: string): Draft | undefined {
     const draft = this.get(key)
@@ -61,3 +71,6 @@ export class ComposerDrafts {
     return draft
   }
 }
+
+/** The app's drafts, shared by every composer and by actions that put text back. */
+export const composerDrafts = new ComposerDrafts()

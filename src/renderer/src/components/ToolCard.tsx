@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { diffLines } from 'diff'
 import type { Block } from '@shared/types'
-import { relative, str, toolSummary, TOOL_VERB } from '../lib/format'
+import { relative, str, toolLabel, toolSummary, TOOL_VERB } from '../lib/format'
+import { planInputItems } from '../lib/timeline'
 import { Icon, type IconName } from './Icon'
 import { useApp } from '../store'
 import { codexFileChange, editedPaths } from '@shared/changes'
 import { DiffViewer } from './DiffViewer'
+import { PlanList } from './PlanCard'
 
 type ToolBlock = Extract<Block, { kind: 'tool' }>
 type Input = Record<string, unknown>
@@ -25,9 +27,18 @@ const TOOL_ICON: Record<string, IconName> = {
   WebSearch: 'globe',
   'Web search': 'globe',
   TodoWrite: 'tasks',
+  TaskCreate: 'tasks',
+  TaskUpdate: 'tasks',
+  TaskList: 'tasks',
+  TaskGet: 'tasks',
+  ToolSearch: 'search',
   Plan: 'tasks',
   Task: 'bolt',
   Agent: 'bolt'
+}
+
+export function toolIcon(name: string): IconName {
+  return TOOL_ICON[name] ?? 'bolt'
 }
 
 export function DiffView({ before, after, path }: { before: string; after: string; path?: string }) {
@@ -71,23 +82,6 @@ export function UnifiedDiff({ diff, path, oldPath }: { diff: string; path?: stri
   return <div className="diff"><DiffViewer diff={diff} path={path} oldPath={oldPath} /></div>
 }
 
-function Todos({ items }: { items: Input[] }) {
-  return (
-    <ul className="todos">
-      {items.map((t, i) => {
-        const done = t.status === 'completed' || t.completed === true
-        const active = t.status === 'in_progress' || t.status === 'inProgress'
-        return (
-          <li key={i} className={done ? 'done' : active ? 'active' : ''}>
-            <span className="box">{done ? <Icon name="check" size={11} /> : null}</span>
-            {str(t.content ?? t.text ?? t.activeForm)}
-          </li>
-        )
-      })}
-    </ul>
-  )
-}
-
 export function ToolDetails({ name, input, root }: { name: string; input: unknown; root: string }) {
   const i = (input ?? {}) as Input
   const path = relative(str(i.file_path ?? i.notebook_path), root)
@@ -120,9 +114,8 @@ export function ToolDetails({ name, input, root }: { name: string; input: unknow
     case 'file change':
       return <ToolDetails name="Edit files" input={i} root={root} />
     case 'TodoWrite':
-      return <Todos items={Array.isArray(i.todos) ? (i.todos as Input[]) : []} />
     case 'Plan':
-      return <Todos items={Array.isArray(i.items) ? (i.items as Input[]) : []} />
+      return <PlanList items={planInputItems(name, i)} />
     case 'Edit files':
       return (
         <>
@@ -143,26 +136,27 @@ export function ToolDetails({ name, input, root }: { name: string; input: unknow
   }
 }
 
+/** One step inside an expanded activity row; opens to the call's details. */
 export function ToolCard({ block, root, memberId, messageId }: { block: ToolBlock; root: string; memberId?: string; messageId?: string }) {
   const [open, setOpen] = useState(false)
   const openChange = useApp((s) => s.openChange)
   const paths = editedPaths(block)
-  const verb = TOOL_VERB[block.name] ?? block.name
+  const verb = TOOL_VERB[block.name] ?? toolLabel(block.name)
   const summary = toolSummary(block.name, block.input, root)
   const showOutput = block.output && !['Edit', 'MultiEdit', 'Write', 'TodoWrite', 'Edit files'].includes(block.name)
   return (
-    <div className={`tool ${open ? 'open' : ''} ${block.status}`}>
-      <button className="tool-head" onClick={() => setOpen(!open)}>
-        <Icon name={TOOL_ICON[block.name] ?? 'bolt'} size={14} className="tool-icon" />
-        <span className="tool-verb">{verb}</span>
-        <span className="tool-summary">{summary}</span>
-        <span className="tool-state">
-          {block.status === 'running' ? <span className="spinner" /> : block.status === 'error' ? <Icon name="alert" size={13} /> : null}
+    <div className={`tx-step ${open ? 'open' : ''} ${block.status}`}>
+      <button className="tx-step-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <Icon name={toolIcon(block.name)} size={13} className="tx-step-icon" />
+        <span className="tx-step-verb">{verb}</span>
+        <span className="tx-step-summary">{summary}</span>
+        <span className="tx-step-state">
+          {block.status === 'running' ? <span className="spinner small" /> : block.status === 'error' ? <Icon name="alert" size={13} /> : null}
         </span>
-        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} className="tool-chevron" />
+        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} className="tx-step-chevron" />
       </button>
       {open && (
-        <div className="tool-body">
+        <div className="tx-step-body tool-body">
           {paths.length > 0 && <div className="tool-review-actions">{paths.map((path) => <button className="btn tiny" key={path} onClick={() => openChange(path, memberId, messageId)}><Icon name="diff" size={12} /> Review {relative(path, root)}</button>)}</div>}
           <ToolDetails name={block.name} input={block.input} root={root} />
           {showOutput && <pre className={`tool-output ${block.isError ? 'error' : ''}`}>{block.output}</pre>}

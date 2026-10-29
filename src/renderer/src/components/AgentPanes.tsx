@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { activeMemberIds, PROVIDER_LABEL, type Member, type Room } from '@shared/types'
-import { paneMessages } from '../lib/agentPanes'
+import { canScroll, paneMessages } from '../lib/agentPanes'
 import { isBusy, STATUS_TEXT } from '../lib/format'
 import { useApp } from '../store'
 import { Composer } from './Composer'
 import { AgentMark, Icon } from './Icon'
 import { ContextRing, ModelMenu, ModeMenu } from './MemberControls'
-import { MessageView } from './MessageView'
+import { Transcript } from './Transcript'
 
 function AgentPane({ room, member, latest, roomBusy, expanded, onExpand }: {
   room: Room; member: Member; latest: Set<string>; roomBusy: boolean; expanded: boolean; onExpand(): void
@@ -69,15 +69,10 @@ function AgentPane({ room, member, latest, roomBusy, expanded, onExpand }: {
             stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
             setFollowing(stick.current)
           }}
-          onWheel={(event) => { if (event.deltaY < 0) { stick.current = false; setFollowing(false) } }}>
+          onWheel={(event) => { if (event.deltaY < 0 && canScroll(scrollRef.current)) { stick.current = false; setFollowing(false) } }}>
           <div className="agent-pane-messages-inner">
             {messages.length === 0 && <div className="agent-pane-empty"><AgentMark provider={member.provider} color={member.color} size={34} /><strong>Ready when you are</strong><p>Message {member.name} below, or use the room composer to coordinate the team.</p></div>}
-            {messages.map((message) => message.author !== 'user' && message.author !== member.id ? (
-              <details key={message.id} className="pane-handoff">
-                <summary><Icon name="arrowRight" size={13} /><span>From {room.members.find((m) => m.id === message.author)?.name ?? message.authorName ?? 'another agent'}<small>{message.handoff?.text || 'Shared an update'}</small></span></summary>
-                <MessageView message={message} room={room} latestOfAuthor={latest.has(message.id)} roomBusy={roomBusy} />
-              </details>
-            ) : <MessageView key={message.id} message={message} room={room} latestOfAuthor={latest.has(message.id)} roomBusy={roomBusy} />)}
+            <Transcript room={room} messages={messages} latest={latest} roomBusy={roomBusy} paneMemberId={member.id} />
           </div>
         </div>
         {!following && <button className="pane-jump" onClick={follow}><Icon name="chevronDown" size={12} /> Latest messages</button>}

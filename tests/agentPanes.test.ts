@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { composerDraftKey, composerRecipients, paneMessages, readRoomLayout, saveRoomLayout } from '../src/renderer/src/lib/agentPanes'
+import { canScroll, composerDraftKey, composerRecipients, paneMessages, readRoomLayout, saveRoomLayout } from '../src/renderer/src/lib/agentPanes'
 import { DEFAULT_SETTINGS, type Message, type Room } from '../src/shared/types'
 import { ComposerDrafts } from '../src/renderer/src/lib/composerDrafts'
 
@@ -112,5 +112,14 @@ describe('attachment saves across composer lifetimes', () => {
     drafts.addAttachment('key', second)
     drafts.finishSaving('key')
     expect(drafts.take('key')?.attachments).toEqual([second])
+  })
+})
+
+describe('scroll following', () => {
+  it('only treats a conversation taller than its view as scrollable', () => {
+    expect(canScroll(null)).toBe(false)
+    expect(canScroll({ scrollHeight: 400, clientHeight: 400 })).toBe(false)
+    expect(canScroll({ scrollHeight: 401, clientHeight: 400 })).toBe(false)
+    expect(canScroll({ scrollHeight: 900, clientHeight: 400 })).toBe(true)
   })
 })

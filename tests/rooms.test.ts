@@ -1,10 +1,11 @@
 import type { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { DEFAULT_ROOM_DEFAULTS, DEFAULT_SETTINGS, type Account, type Attachment, type Member, type MemberSettings, type Room } from '../src/shared/types'
+import { DEFAULT_ROOM_DEFAULTS, DEFAULT_SETTINGS, type Account, type Attachment, type Member, type MemberSettings, type Message, type Room } from '../src/shared/types'
 import { RoomManager, type RoomHost } from '../src/main/rooms'
 import type { Store } from '../src/main/store'
 import type { AccountManager } from '../src/main/accounts'
 import type { AgentEvent, TurnInput } from '../src/main/agents/types'
+import { appendFileSync } from 'node:fs'
 import { diffTrees, restoreTree, snapshot } from '../src/main/git'
 
 interface MockConnector extends EventEmitter {
@@ -92,7 +93,7 @@ function setup(patch: Partial<Room> = {}) {
     get: vi.fn((id: string) => rooms.get(id)), all: vi.fn(() => [...rooms.values()]),
     summary: vi.fn((value: Room) => value), put: vi.fn((value: Room) => rooms.set(value.id, value)),
     saveSoon: vi.fn(), saveNow: vi.fn(), addRecentFolder: vi.fn(), delete: vi.fn((id: string) => rooms.delete(id)),
-    settings: { defaults: DEFAULT_ROOM_DEFAULTS }
+    takeReleased: vi.fn((): Array<{ room: Room; message: Message }> => []), settings: { defaults: DEFAULT_ROOM_DEFAULTS }
   }
   const catalog = [
     { id: 'saved-model', label: 'Saved model', efforts: ['high', 'xhigh'], isDefault: true },
@@ -1167,5 +1168,337 @@ describe('RoomManager shared file undo', () => {
       expect(restoreTree).toHaveBeenCalledWith(`/worktrees/${memberId}`, reply.snapshot?.before, reply.snapshot?.after)
       expect(reply.undone).toBe(true)
     }
+  })
+})
+
+describe('RoomManager block times and live progress', () => {
+  it('stamps every block when it is created and never moves it', async () => {
+    const { send, replies } = setup({ kind: 'claude', members: [member('a', 'claude')] })
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(replies('a')[0].createdAt + 10)
+    try {
+      connector.report({ t: 'block-start', key: 'thinking', kind: 'thinking' })
+      clock.mockReturnValue(replies('a')[0].createdAt + 20)
+      connector.report({ t: 'tool-start', id: 'tool-1', name: 'Bash', input: {} })
+      connector.report({ t: 'approval', requestId: 'r1', toolName: 'Bash', toolUseId: 'tool-1', input: {}, canAlways: false })
+      clock.mockReturnValue(replies('a')[0].createdAt + 30)
+      connector.report({ t: 'tool-input', id: 'tool-2', name: 'Read', input: { file_path: 'a.ts' } })
+      connector.report({ t: 'block-set', key: 'answer', kind: 'text', text: 'Done' })
+      clock.mockReturnValue(replies('a')[0].createdAt + 40)
+      connector.report({ t: 'delta', key: 'thinking', text: 'more thought' })
+      connector.report({ t: 'tool-input', id: 'tool-1', name: 'Bash', input: { command: 'ls' } })
+      connector.report({ t: 'tool-end', id: 'tool-1', output: 'ok' })
+      connector.report({ t: 'turn-end', ok: false, error: 'Late failure' })
+    } finally {
+      clock.mockRestore()
+    }
+    const reply = replies('a')[0]
+    const base = reply.createdAt
+    expect(reply.blocks.map((b) => [b.kind, b.at! - base])).toEqual([
+      ['thinking', 10], ['tool', 20], ['approval', 20], ['tool', 30], ['text', 30], ['error', 40]
+    ])
+    const times = reply.blocks.map((b) => b.at!)
+    expect(times).toEqual([...times].sort((x, y) => x - y))
+  })
+
+  it('stamps the error block of an agent that cannot start', async () => {
+    const { send, replies, accounts } = setup({ kind: 'claude', members: [member('a', 'claude')] })
+    accounts.get.mockReturnValue(undefined)
+    send('Original task')
+    await settle()
+    const [block] = replies('a')[0].blocks
+    expect(block).toMatchObject({ kind: 'error' })
+    expect(block.at).toBeGreaterThanOrEqual(replies('a')[0].createdAt)
+  })
+
+  it('reports output tokens of the running turn, throttled, and resets them for the next turn', async () => {
+    const { manager, room, send, host } = setup({ kind: 'claude', members: [member('a', 'claude')] })
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    const emitted = () => vi.mocked(host.emit).mock.calls
+      .map(([e]) => e)
+      .filter((e) => e.type === 'agent-status' && e.memberId === 'a' && e.runtime.turnOutputTokens !== undefined)
+      .map((e) => e.type === 'agent-status' ? e.runtime.turnOutputTokens : undefined)
+    connector.report({ t: 'progress', outputTokens: 10 })
+    connector.report({ t: 'progress', outputTokens: 20 })
+    connector.report({ t: 'progress', outputTokens: 30 })
+    expect(manager.statuses(room.id).a.turnOutputTokens).toBe(30)
+    expect(emitted()).toEqual([10])
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(emitted()).toEqual([10, 30])
+    complete(connector)
+    await settle()
+    send('Next task')
+    await settle()
+    expect(connector.send).toHaveBeenCalledTimes(2)
+    expect(manager.statuses(room.id).a.turnOutputTokens).toBeUndefined()
+  })
+
+  it('ignores progress that arrives after the turn ended', async () => {
+    const { manager, room, send } = setup({ kind: 'claude', members: [member('a', 'claude')] })
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    complete(connector)
+    connector.report({ t: 'progress', outputTokens: 5 })
+    expect(manager.statuses(room.id).a.turnOutputTokens).toBeUndefined()
+  })
+})
+
+describe('RoomManager queue for later', () => {
+  const solo = () => setup({ kind: 'claude', members: [member('a', 'claude')] })
+
+  it('keeps a queued message out of the running turn and runs it as its own turn afterwards', async () => {
+    const { manager, room, send, replies, host } = solo()
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    connector.steer.mockResolvedValue(true)
+    const queued = manager.send(room.id, { text: 'Later task', to: ['a'], attachments: [attachment], queue: true })!
+    await settle()
+    expect(queued.queued).toBe(true)
+    expect(host.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', message: expect.objectContaining({ id: queued.id, queued: true }) }))
+    expect(connector.steer).not.toHaveBeenCalled()
+    expect(manager.statuses(room.id).a.queued).toBe(1)
+
+    send('Plain feedback')
+    await settle()
+    expect(connector.steer).toHaveBeenCalledOnce()
+    expect(connector.steer.mock.calls[0][0].text).toContain('Plain feedback')
+    expect(connector.steer.mock.calls[0][0].text).not.toContain('Later task')
+    expect(replies('a')[0].inputMessageIds).not.toContain(queued.id)
+
+    complete(connector)
+    await settle()
+    expect(connector.send).toHaveBeenCalledTimes(2)
+    const next = connector.send.mock.calls[1][0]
+    expect(next.text).toContain('Later task')
+    expect(next.text).not.toContain('Original task')
+    expect(next.images).toEqual([attachment])
+    expect(queued.queued).toBeUndefined()
+    expect(queued.sentAt).toBeGreaterThanOrEqual(queued.createdAt)
+    expect(queued.sentAt).toBeLessThanOrEqual(replies('a')[1].createdAt)
+    expect(replies('a')[1].inputMessageIds).toEqual([queued.id])
+    expect(manager.statuses(room.id).a.queued).toBe(0)
+    complete(connector)
+    await settle()
+    expect(connector.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('runs two queued messages as two turns, in order', async () => {
+    const { manager, room, send } = solo()
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    manager.send(room.id, { text: 'First later', to: ['a'], attachments: [], queue: true })
+    manager.send(room.id, { text: 'Second later', to: ['a'], attachments: [], queue: true })
+    await settle()
+    expect(manager.statuses(room.id).a.queued).toBe(2)
+    complete(connector)
+    await settle()
+    expect(connector.send.mock.calls[1][0].text).toContain('First later')
+    expect(connector.send.mock.calls[1][0].text).not.toContain('Second later')
+    complete(connector)
+    await settle()
+    expect(connector.send.mock.calls[2][0].text).toContain('Second later')
+  })
+
+  it('sends a queued message to an idle agent right away', async () => {
+    const { manager, room } = solo()
+    const message = manager.send(room.id, { text: 'Start now', to: ['a'], attachments: [], queue: true })!
+    await settle()
+    expect(message.queued).toBeUndefined()
+    expect(mocks.connectors[0].send.mock.calls[0][0].text).toContain('Start now')
+  })
+
+  it('cancels a queued message and returns it for editing', async () => {
+    const { manager, room, send, host } = solo()
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    const queued = manager.send(room.id, { text: 'Later task', to: ['a'], attachments: [attachment], queue: true })!
+    expect(manager.cancelQueued(room.id, 'missing')).toBeUndefined()
+    expect(manager.cancelQueued(room.id, queued.id)).toEqual({ text: 'Later task', attachments: [attachment], to: ['a'] })
+    expect(room.messages.some((m) => m.id === queued.id)).toBe(false)
+    expect(host.emit).toHaveBeenCalledWith({ type: 'messages-removed', roomId: room.id, messageIds: [queued.id] })
+    expect(manager.statuses(room.id).a.queued).toBe(0)
+    expect(manager.cancelQueued(room.id, queued.id)).toBeUndefined()
+    complete(connector)
+    await settle()
+    expect(connector.send).toHaveBeenCalledOnce()
+  })
+
+  it('does not cancel a message that already started', async () => {
+    const { manager, room, send } = solo()
+    const started = send('Original task')
+    await settle()
+    expect(manager.cancelQueued(room.id, started.id)).toBeUndefined()
+    expect(room.messages).toContain(started)
+  })
+
+  it('sends a queued message now as feedback to the running turn', async () => {
+    const { manager, room, send, replies } = solo()
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    connector.steer.mockResolvedValue(true)
+    const queued = manager.send(room.id, { text: 'Later task', to: ['a'], attachments: [], queue: true })!
+    await settle()
+    manager.sendQueuedNow(room.id, queued.id)
+    expect(queued.queued).toBeUndefined()
+    expect(queued.sentAt).toBeGreaterThanOrEqual(queued.createdAt)
+    await settle()
+    expect(connector.steer).toHaveBeenCalledOnce()
+    expect(connector.steer.mock.calls[0][0].text).toContain('Later task')
+    expect(replies('a')[0].inputMessageIds).toContain(queued.id)
+    expect(manager.statuses(room.id).a.queued).toBe(0)
+    complete(connector)
+    await settle()
+    expect(connector.send).toHaveBeenCalledOnce()
+  })
+
+  it('runs a sent-now message next when the running turn cannot take it', async () => {
+    const { manager, room, send } = solo()
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    const queued = manager.send(room.id, { text: 'Later task', to: ['a'], attachments: [], queue: true })!
+    Reflect.deleteProperty(connector, 'steer')
+    manager.sendQueuedNow(room.id, queued.id)
+    complete(connector)
+    await settle()
+    expect(connector.send).toHaveBeenCalledTimes(2)
+    expect(connector.send.mock.calls[1][0].text).toContain('Later task')
+  })
+
+  it('refuses Send now for a queued command', async () => {
+    const { manager, room, send } = solo()
+    send('Original task')
+    await settle()
+    const command = manager.send(room.id, { text: '/compact', to: ['a'], attachments: [], queue: true })!
+    expect(command.queued).toBe(true)
+    expect(() => manager.sendQueuedNow(room.id, command.id)).toThrow('Commands run after the current turn finishes.')
+    expect(command.queued).toBe(true)
+    complete(mocks.connectors[0])
+    await settle()
+    expect(mocks.connectors[0].send.mock.calls[1][0].text).toBe('/compact')
+    expect(command.queued).toBeUndefined()
+    expect(command.sentAt).toBeDefined()
+  })
+
+  it('returns queued messages on Stop and removes them from the conversation', async () => {
+    const { manager, room, send, host } = solo()
+    send('Original task')
+    await settle()
+    const connector = mocks.connectors[0]
+    const first = manager.send(room.id, { text: 'First later', to: ['a'], attachments: [attachment], queue: true })!
+    const second = manager.send(room.id, { text: 'Second later', to: ['a'], attachments: [], queue: true })!
+    const drafts = manager.stop(room.id, 'a')
+    expect(drafts).toEqual([
+      { text: 'First later', attachments: [attachment], to: ['a'] },
+      { text: 'Second later', attachments: [], to: ['a'] }
+    ])
+    expect(room.messages.some((m) => m.id === first.id || m.id === second.id)).toBe(false)
+    expect(host.emit).toHaveBeenCalledWith({ type: 'messages-removed', roomId: room.id, messageIds: [first.id, second.id] })
+    await settle()
+    expect(connector.send).toHaveBeenCalledOnce()
+    expect(manager.stop(room.id, 'a')).toEqual([])
+  })
+
+  it('keeps a queued message on Stop while another recipient still waits for it', async () => {
+    const { manager, room, send } = setup()
+    send('Lead task', ['a'])
+    send('Worker task', ['b'])
+    await settle()
+    const queued = manager.send(room.id, { text: 'Later for both', to: ['a', 'b'], attachments: [], queue: true })!
+    expect(manager.stop(room.id, 'a')).toEqual([])
+    expect(queued.queued).toBe(true)
+    expect(manager.stop(room.id, 'b')).toEqual([{ text: 'Later for both', attachments: [], to: ['a', 'b'] }])
+  })
+
+  it('does not queue a message when one recipient is idle, and keeps it out of the busy turn', async () => {
+    const { manager, room, send } = setup()
+    send('Worker task', ['b'])
+    await settle()
+    const worker = mocks.connectors[0]
+    worker.steer.mockResolvedValue(true)
+    const message = manager.send(room.id, { text: 'Review the notice copy', to: ['a', 'b'], attachments: [], queue: true })!
+    await settle()
+    expect(message.queued).toBeUndefined()
+    const lead = mocks.connectors[1]
+    expect(lead.send.mock.calls[0][0].text).toContain('Review the notice copy')
+    expect(worker.steer).not.toHaveBeenCalled()
+    send('Use the shorter label', ['b'])
+    await settle()
+    expect(worker.steer).toHaveBeenCalledOnce()
+    expect(worker.steer.mock.calls[0][0].text).not.toContain('Review the notice copy')
+    complete(worker)
+    await settle()
+    expect(worker.send).toHaveBeenCalledTimes(2)
+    expect(worker.send.mock.calls[1][0].text).toContain('Review the notice copy')
+  })
+
+  it('keeps a queued message for its own turn when another recipient starts it first', async () => {
+    const { manager, room, send } = setup()
+    send('Lead task', ['a'])
+    send('Worker task', ['b'])
+    await settle()
+    const [lead, worker] = mocks.connectors
+    worker.steer.mockResolvedValue(true)
+    const queued = manager.send(room.id, { text: 'Later for both', to: ['a', 'b'], attachments: [], queue: true })!
+    expect(queued.queued).toBe(true)
+    complete(lead, 'Lead finished\n→ DONE')
+    await settle()
+    expect(lead.send.mock.calls[1][0].text).toContain('Later for both')
+    expect(queued.queued).toBeUndefined()
+    expect(manager.cancelQueued(room.id, queued.id)).toBeUndefined()
+    send('Worker feedback', ['b'])
+    await settle()
+    expect(worker.steer.mock.calls.at(-1)![0].text).toContain('Worker feedback')
+    expect(worker.steer.mock.calls.some(([input]) => input.text.includes('Later for both'))).toBe(false)
+    complete(worker, 'Worker finished\n→ DONE')
+    await settle()
+    expect(worker.send.mock.calls[1][0].text).toContain('Later for both')
+  })
+
+  it('makes a queued message ordinary input when the runtime is disposed', async () => {
+    const { manager, room, send, replies } = solo()
+    send('Original task')
+    await settle()
+    const queued = manager.send(room.id, { text: 'Later task', to: ['a'], attachments: [], queue: true })!
+    expect(vi.mocked(appendFileSync).mock.calls.some(([, text]) => String(text).includes('Later task'))).toBe(false)
+    // The turn it waited behind keeps working after it was queued.
+    const now = vi.spyOn(Date, 'now').mockReturnValue(queued.createdAt + 1000)
+    try {
+      mocks.connectors[0].report({ t: 'block-set', key: 'more', kind: 'text', text: 'More work' })
+      manager.disposeAll()
+    } finally {
+      now.mockRestore()
+    }
+    expect(queued.queued).toBeUndefined()
+    // Sent after the turn it never reached, so that turn is not split around it.
+    const latest = Math.max(...replies('a')[0].blocks.map((b) => b.at ?? 0))
+    expect(latest).toBe(queued.createdAt + 1000)
+    expect(queued.sentAt).toBeGreaterThanOrEqual(latest)
+    expect(vi.mocked(appendFileSync).mock.calls.some(([, text]) => String(text).includes('Later task'))).toBe(true)
+    send('Resume')
+    await settle()
+    const text = mocks.connectors[1].send.mock.calls[0][0].text
+    expect(text).toContain('Later task')
+    expect(text).toContain('Resume')
+  })
+
+  it('adds messages released from a queue while loading to the transcript', () => {
+    const { room, store, accounts, host } = solo()
+    const message: Message = { id: 'q1', author: 'user', createdAt: 150, sentAt: 201, text: 'Released later task', blocks: [], status: 'done', to: ['a'] }
+    store.takeReleased.mockReturnValueOnce([{ room, message }])
+    vi.mocked(appendFileSync).mockClear()
+    managers.push(new RoomManager(store as unknown as Store, accounts as unknown as AccountManager, host))
+    expect(appendFileSync).toHaveBeenCalledOnce()
+    expect(vi.mocked(appendFileSync).mock.calls[0][0]).toBe('/project/.collab/room-1/chat.md')
+    expect(String(vi.mocked(appendFileSync).mock.calls[0][1])).toContain('Released later task')
   })
 })

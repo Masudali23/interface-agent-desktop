@@ -47,6 +47,9 @@ export class CodexExecAgent extends EventEmitter implements AgentConnector {
   private stderrTail = ''
   private lastError = ''
   private seenTools = new Set<string>()
+  /** The plan's latest version. Each change is a new block, so every version keeps its own time. */
+  private plan?: { id: string; input: string }
+  private planVersion = 0
 
   constructor(private opts: CodexExecOptions) {
     super()
@@ -105,6 +108,7 @@ export class CodexExecAgent extends EventEmitter implements AgentConnector {
     this.stderrTail = ''
     this.lastError = ''
     this.seenTools.clear()
+    this.plan = undefined
     const proc = spawn(this.opts.binary, this.args(images, input.overrides), {
       cwd: this.opts.cwd,
       env: this.opts.env,
@@ -268,10 +272,20 @@ export class CodexExecAgent extends EventEmitter implements AgentConnector {
         this.startTool(id, 'Web search', { query: item.query })
         if (done) this.emitEvent({ t: 'tool-end', id })
         return
-      case 'todo_list':
-        this.startTool(id, 'Plan', { items: item.items ?? [] })
-        if (done) this.emitEvent({ t: 'tool-end', id })
+      case 'todo_list': {
+        const items: Json[] = Array.isArray(item.items) ? item.items : []
+        const json = JSON.stringify(items)
+        if (this.plan?.input !== json) {
+          if (this.plan) this.emitEvent({ t: 'tool-end', id: this.plan.id })
+          this.plan = { id: `${id}-${++this.planVersion}`, input: json }
+          this.emitEvent({ t: 'tool-start', id: this.plan.id, name: 'Plan', input: { items } })
+        }
+        if (done) {
+          this.emitEvent({ t: 'tool-end', id: this.plan.id })
+          this.plan = undefined
+        }
         return
+      }
       case 'error':
         // Non-fatal notices (for example model metadata warnings).
         return

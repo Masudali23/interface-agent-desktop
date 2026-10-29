@@ -29,3 +29,8 @@ export function readRoomLayout(roomId: string): RoomLayout {
 export function saveRoomLayout(roomId: string, layout: RoomLayout): void {
   try { localStorage.setItem(`iface.roomLayout.${roomId}`, layout) } catch { /* Preference is optional. */ }
 }
+
+/** The conversation is taller than its viewport, so scrolling up actually moves it. */
+export function canScroll(el: { scrollHeight: number; clientHeight: number } | null): boolean {
+  return !!el && el.scrollHeight > el.clientHeight + 1
+}

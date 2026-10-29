@@ -60,6 +60,15 @@ export function NewSessionDialog() {
     }
   }, [kind, accounts.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (!request) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !creating) close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [request, creating, close])
+
   if (!request) return null
   const list = kind === 'team' ? accounts : accounts.filter((a) => a.provider === kind)
 

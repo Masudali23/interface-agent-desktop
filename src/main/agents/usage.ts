@@ -17,6 +17,21 @@ function titleCase(s: string): string {
   return s.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+/** A limit's scope: newer Claude Code sends `{ model: { display_name }, surface }` objects. */
+function scopeName(scope: unknown): string {
+  if (typeof scope === 'string' || typeof scope === 'number') return String(scope)
+  if (!scope || typeof scope !== 'object') return ''
+  const s = scope as Json
+  const name = (v: unknown): string => {
+    if (typeof v === 'string' || typeof v === 'number') return String(v)
+    const o = (v ?? {}) as Json
+    const found = o.display_name ?? o.displayName ?? o.name ?? o.id
+    return typeof found === 'string' || typeof found === 'number' ? String(found) : ''
+  }
+  const parts = [name(s.model), name(s.surface)].filter(Boolean)
+  return parts.length ? parts.join(' · ') : name(s)
+}
+
 function money(minor: number | null | undefined, decimals = 2, currency = 'USD'): string {
   if (minor == null) return ''
   const v = minor / 10 ** decimals
@@ -28,16 +43,23 @@ export function claudeLimits(usage: Json): { limits: UsageLimit[]; notes: string
   const limits: UsageLimit[] = []
   const notes: string[] = []
   const rl = usage?.rate_limits ?? {}
-  for (const l of Array.isArray(rl.limits) ? rl.limits : []) {
-    const label = CLAUDE_KIND[l.kind] ?? (l.scope ? `${titleCase(l.group ?? l.kind)} · ${l.scope}` : titleCase(l.kind ?? 'limit'))
+  const shares: Json[] = Array.isArray(rl.weekly_scoped_shares) ? rl.weekly_scoped_shares : []
+  const all: Json[] = Array.isArray(rl.limits) ? rl.limits : []
+  all.forEach((l, index) => {
+    const scope = scopeName(l.scope)
+    const kind = typeof l.kind === 'string' ? l.kind : 'limit'
+    const label = scope ? `${titleCase(l.group ?? kind)} · ${scope}` : (CLAUDE_KIND[kind] ?? titleCase(kind))
+    const share = shares.find((s) => s?.limit_index === index)
+    const allowance = Number(share?.allowance_percent_of_weekly)
     limits.push({
-      id: `${l.kind}${l.scope ? `:${l.scope}` : ''}`,
+      id: `${kind}${scope ? `:${scope.toLowerCase()}` : ''}`,
       label,
       percent: Math.max(0, Math.min(100, Number(l.percent ?? 0))),
       resetsAt: l.resets_at ? Date.parse(l.resets_at) : undefined,
-      severity: l.severity === 'critical' || l.severity === 'warning' ? l.severity : 'normal'
+      severity: l.severity === 'critical' || l.severity === 'warning' ? l.severity : 'normal',
+      ...(scope && Number.isFinite(allowance) && allowance > 0 ? { detail: `${scope} can use up to ${allowance}% of the weekly limit` } : {})
     })
-  }
+  })
   if (!limits.length) {
     // Older Claude Code: fall back to the raw windows.
     for (const [key, label] of [
@@ -67,6 +89,11 @@ export function claudeLimits(usage: Json): { limits: UsageLimit[]; notes: string
   if (spend?.enabled && spend.used) {
     notes.push(`Usage credits spent: ${money(spend.used.amount_minor, spend.used.exponent, spend.used.currency)}`)
   }
+  const rows: Json[] = Array.isArray(rl.seven_day_breakdown?.rows) ? rl.seven_day_breakdown.rows : []
+  const used = rows
+    .filter((r) => typeof r?.display_name === 'string' && Number(r.percent) > 0)
+    .sort((a, b) => Number(b.percent) - Number(a.percent))
+  if (used.length) notes.push(`This week by app: ${used.map((r) => `${r.display_name} ${Math.round(Number(r.percent))}%`).join(' · ')}`)
   return { limits, notes, plan: usage?.subscription_type }
 }
 

@@ -124,7 +124,12 @@ export interface Question {
   options: Array<{ label: string; description?: string }>
 }
 
-export type Block =
+/** When a block was created (ms since epoch). Older saved blocks have none. */
+interface BlockTime {
+  at?: number
+}
+
+export type Block = BlockTime & (
   | { kind: 'text'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string }
   | {
@@ -150,6 +155,7 @@ export type Block =
       answers?: Record<string, string>
     }
   | { kind: 'error'; id: string; text: string }
+)
 
 export interface Handoff {
   /** A member id, 'user' or 'done'. */
@@ -230,6 +236,17 @@ export interface Message {
   snapshot?: { before?: string; after?: string }
   /** Files were put back with Undo. */
   undone?: boolean
+  /** User messages sent with "queue for later" that no recipient has started yet. */
+  queued?: boolean
+  /** When a queued user message was actually sent; the timeline places it here. */
+  sentAt?: number
+}
+
+/** A queued message taken back out of the conversation (cancelled or stopped). */
+export interface QueuedDraft {
+  text: string
+  attachments: Attachment[]
+  to?: string[]
 }
 
 export interface Room {
@@ -286,6 +303,8 @@ export interface AgentRuntime {
   detail?: string
   queued?: number
   context?: ContextUsage
+  /** Output tokens reported so far in the running turn. */
+  turnOutputTokens?: number
 }
 
 export interface RuntimeMeta {
@@ -380,6 +399,8 @@ export interface SendInput {
   text: string
   to: string[]
   attachments: Attachment[]
+  /** Run as its own turn after the current one instead of joining it as feedback. */
+  queue?: boolean
 }
 
 export type ApprovalDecision =

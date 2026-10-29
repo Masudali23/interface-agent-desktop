@@ -134,6 +134,21 @@ describe('formatChatMarkdown', () => {
     expect(formatChatMarkdown(emptyRoom, { exportedAt })).toContain('No current participants.')
   })
 
+  it('marks a message still waiting in the queue and records when a queued message was sent', () => {
+    const live = message({ id: 'live', author: 'claude', status: 'streaming', text: 'Working' })
+    const dispatched = message({ id: 'sent-later', author: 'user', createdAt: 2000, sentAt: 5000, text: 'Dispatched later', to: ['claude'] })
+    const waiting = message({ id: 'waiting', author: 'user', createdAt: 3000, text: 'Queued for later', to: ['claude'], queued: true })
+    const exported = formatChatMarkdown(room([live, dispatched, waiting]), { exportedAt })
+    const section = (n: number) => exported.split(`## ${n}. `)[1].split('\n## ')[0]
+    expect(section(2)).toContain(`- Written: ${new Date(2000).toISOString()}`)
+    expect(section(2)).toContain(`- Sent: ${new Date(5000).toISOString()}`)
+    expect(section(2)).not.toContain('Queued:')
+    expect(section(3)).toContain(`- Written: ${new Date(3000).toISOString()}`)
+    expect(section(3)).toContain('- Queued: waiting for the current turn, not sent yet')
+    expect(section(3)).not.toContain('- Sent:')
+    expect(section(1)).toContain('- Sent: ')
+  })
+
   it('escapes metadata and attachment labels and retains zero-valued usage and empty tool outputs', () => {
     const unsafeRoom = room([message({ blocks: [{ kind: 'tool', id: 't', name: '<Script> [unsafe]', input: null, output: '', status: 'error', isError: true }], usage: { inputTokens: 0, cachedTokens: 0, outputTokens: 0, steps: 0, durationMs: 0 } })])
     unsafeRoom.title = '[Chat](javascript:bad) <script>\n## forged heading'

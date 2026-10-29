@@ -9,6 +9,7 @@ import {
   type AppSettings,
   type CodexMode,
   type MemberSettings,
+  type Message,
   type Room,
   type RoomSummary,
   type SearchHit
@@ -38,6 +39,11 @@ function readJson<T>(file: string): T | undefined {
   } catch {
     return undefined
   }
+}
+
+/** The last moment a room recorded anything: a message, its dispatch or one of its blocks. */
+function lastActivity(messages: Message[]): number {
+  return messages.reduce((latest, m) => m.blocks.reduce((max, b) => Math.max(max, b.at ?? 0), Math.max(latest, m.createdAt, m.sentAt ?? 0)), 0)
 }
 
 const SANDBOX_TO_MODE: Record<string, CodexMode> = { 'read-only': 'read-only', 'workspace-write': 'auto', 'danger-full-access': 'full' }
@@ -84,6 +90,8 @@ export class Store {
   private settingsFile: string
   private timers = new Map<string, NodeJS.Timeout>()
   private rooms = new Map<string, Room>()
+  /** Queued messages released on load, for the room manager to add to each room's transcript. */
+  private released: Array<{ room: Room; message: Message }> = []
   settings: AppSettings
 
   constructor(dir: string) {
@@ -111,16 +119,34 @@ export class Store {
       const raw = readJson<Json>(join(this.roomsDir, name))
       if (!raw?.id) continue
       const room = migrateRoom(raw)
-      // A turn that was running when the app closed can't continue.
+      // A turn that was running when the app closed can't continue, and a message queued
+      // for after it lost its place in line: it becomes ordinary input for the next turn.
+      // It counts as sent after everything the room recorded, so no turn that never saw it
+      // is split around it.
+      const releasedAt = lastActivity(room.messages) + 1
+      let released = false
       for (const m of room.messages) {
         if (m.status === 'streaming') m.status = 'stopped'
+        if (m.queued) {
+          delete m.queued
+          m.sentAt = releasedAt
+          this.released.push({ room, message: m })
+          released = true
+        }
         for (const b of m.blocks) {
           if (b.kind === 'approval' && b.status === 'pending') b.status = 'expired'
           if (b.kind === 'tool' && b.status === 'running') b.status = 'error'
         }
       }
       this.rooms.set(room.id, room)
+      // Saved right away, so the message is released (and added to the transcript) once.
+      if (released) this.saveNow(room.id)
     }
+  }
+
+  /** Queued messages released while loading, each returned once. */
+  takeReleased(): Array<{ room: Room; message: Message }> {
+    return this.released.splice(0)
   }
 
   saveSettings(patch: Partial<AppSettings>): AppSettings {

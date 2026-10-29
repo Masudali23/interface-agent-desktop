@@ -1,73 +1,105 @@
-import { memo, useEffect, useRef, useState } from 'react'
-import type { ApprovalDecision, Message, Room } from '@shared/types'
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react'
+import type { ApprovalDecision, Attachment, Member, Message } from '@shared/types'
 import { latestFileActivity } from '@shared/changes'
 import { basename, timeOf, usageText } from '../lib/format'
+import { liveStep, segmentParts, type AgentItem } from '../lib/timeline'
 import { act, useApp } from '../store'
+import { ActivityGroup, LiveStatus } from './Activity'
 import { ApprovalCard } from './ApprovalCard'
 import { AgentMark, Icon } from './Icon'
 import { Markdown } from './Markdown'
-import { ToolCard } from './ToolCard'
+import { PlanCard } from './PlanCard'
+import { useTranscript } from './TranscriptContext'
 
-interface Props {
-  message: Message
-  room: Room
-  /** This is the agent's newest reply (only that one can be retried). */
-  latestOfAuthor: boolean
-  roomBusy: boolean
+/** Scrolls to and briefly highlights a message opened from search. */
+function useFocusFlash(messageId: string, enabled: boolean): RefObject<HTMLDivElement | null> {
+  const ref = useRef<HTMLDivElement>(null)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const focus = useApp((s) => enabled && s.focusMessageId === messageId)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  useEffect(() => {
+    const el = ref.current
+    if (!focus || !el) return
+    el.scrollIntoView({ block: 'center' })
+    // Restart the highlight when the same message is opened again while it still shows.
+    el.classList.remove('flash')
+    void el.offsetWidth
+    el.classList.add('flash')
+    // Clearing the focus re-runs this effect at once, so the timer can't live in its cleanup.
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => el.classList.remove('flash'), 2000)
+    useApp.setState({ focusMessageId: undefined })
+  }, [focus])
+  return ref
 }
 
-function Thinking({ text, live }: { text: string; live: boolean }) {
-  const [open, setOpen] = useState(false)
-  if (!text.trim()) return null
-  return (
-    <div className={`thinking ${open ? 'open' : ''}`}>
-      <button className="thinking-head" onClick={() => setOpen(!open)}>
-        <Icon name="brain" size={13} />
-        {live ? 'Thinking…' : 'Thought process'}
-        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} />
-      </button>
-      {open && <div className="thinking-body">{text}</div>}
-    </div>
-  )
+function useCopy(text: string): [boolean, () => void] {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1200)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return [copied, () => {
+    void navigator.clipboard.writeText(text)
+    setCopied(true)
+  }]
 }
 
-function Attachments({ message, roomId }: { message: Message; roomId: string }) {
+const isImage = (a: Attachment): boolean => a.mime.startsWith('image/')
+
+function UserAttachments({ attachments, roomId }: { attachments: Attachment[]; roomId: string }) {
   const openLink = useApp((s) => s.openLink)
-  if (!message.attachments?.length) return null
+  const open = (a: Attachment) => () => void act(() => openLink(a.path, { roomId }))
+  const images = attachments.filter(isImage)
+  const files = attachments.filter((a) => !isImage(a))
   return (
-    <div className="msg-attachments">
-      {message.attachments.map((a) =>
-        a.mime.startsWith('image/') ? (
-          <button key={a.path} className="attachment-preview" title={`Preview ${a.name}`} onClick={() => void act(() => openLink(a.path, { roomId }))}>
-            <img src={`iface://attachment/${roomId}/${encodeURIComponent(basename(a.path))}`} alt={a.name} />
-          </button>
-        ) : (
-          <button key={a.path} className="file-chip" title={`Preview ${a.name}`} onClick={() => void act(() => openLink(a.path, { roomId }))}>
-            <Icon name="file" size={12} /> {a.name}
-          </button>
-        )
+    <>
+      {images.length > 0 && (
+        <div className="tx-user-images">
+          {images.map((a) => (
+            <button key={a.path} className="tx-thumb" title={`Preview ${a.name}`} onClick={open(a)}>
+              <img src={`iface://attachment/${roomId}/${encodeURIComponent(basename(a.path))}`} alt={a.name} loading="lazy" />
+            </button>
+          ))}
+        </div>
       )}
-    </div>
+      {files.length > 0 && (
+        <div className="tx-user-files">
+          {files.map((a) => (
+            <button key={a.path} className="tx-file-chip" title={`Preview ${a.name}`} onClick={open(a)}>
+              <Icon name="file" size={12} /> <span>{a.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 
-function EditBox({ message, room, onDone }: { message: Message; room: Room; onDone: () => void }) {
+function EditBox({ message, onDone }: { message: Message; onDone: () => void }) {
+  const { roomId } = useTranscript()
+  const messages = useApp((s) => s.roomData[roomId]?.messages)
   const [text, setText] = useState(message.text)
   const [undoFiles, setUndoFiles] = useState(false)
-  const later = room.messages.slice(room.messages.findIndex((m) => m.id === message.id) + 1).filter((m) => m.author !== 'user').length
+  const later = useMemo(() => {
+    const list = messages ?? []
+    return list.slice(list.findIndex((m) => m.id === message.id) + 1).filter((m) => m.author !== 'user').length
+  }, [messages, message.id])
   const save = async (): Promise<void> => {
     if (!text.trim()) return
     onDone()
     await act(
-      () => window.iface.editMessage(room.id, message.id, text.trim(), undoFiles),
+      () => window.iface.editMessage(roomId, message.id, text.trim(), undoFiles),
       (notes) => (notes ? notes : undefined)
     )
   }
   return (
-    <div className="edit-box">
+    <div className="edit-box tx-edit-box">
       <textarea
         autoFocus
         value={text}
+        aria-label="Edit message"
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save()
@@ -95,176 +127,198 @@ function EditBox({ message, room, onDone }: { message: Message; room: Room; onDo
   )
 }
 
+export const UserMessage = memo(function UserMessage({ message, roomBusy }: { message: Message; roomBusy: boolean }) {
+  const { roomId, members, team } = useTranscript()
+  const [editing, setEditing] = useState(false)
+  const [copied, copy] = useCopy(message.text)
+  const ref = useFocusFlash(message.id, true)
+  const to = (message.to ?? []).map((id) => members.find((m) => m.id === id)?.name ?? '').filter(Boolean)
+  return (
+    <div className="tx-user" ref={ref} data-id={message.id}>
+      {message.attachments?.length ? <UserAttachments attachments={message.attachments} roomId={roomId} /> : null}
+      {editing ? (
+        <EditBox message={message} onDone={() => setEditing(false)} />
+      ) : (
+        message.text && <div className="tx-user-bubble">{message.text}</div>
+      )}
+      {!editing && (
+        <div className="tx-user-meta">
+          <span className="tx-user-when">
+            {team && to.length ? `to ${to.join(', ')} · ` : ''}
+            {timeOf(message.sentAt ?? message.createdAt)}
+          </span>
+          <button className="icon-btn" onClick={copy} title="Copy" aria-label="Copy message">
+            <Icon name={copied ? 'check' : 'copy'} size={13} />
+          </button>
+          {!roomBusy && (
+            <button className="icon-btn" onClick={() => setEditing(true)} title="Edit and resend" aria-label="Edit and resend">
+              <Icon name="pencil" size={13} />
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+})
+
 function changedFiles(message: Message): boolean {
   if (message.diff?.trim()) return true
   return message.blocks.some((b) => b.kind === 'tool' && ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Edit files'].includes(b.name) && b.status === 'done')
 }
 
-export const MessageView = memo(function MessageView({ message, room, latestOfAuthor, roomBusy }: Props) {
-  const [copied, setCopied] = useState(false)
-  const [editing, setEditing] = useState(false)
+function AgentHeader({ message, member, name, provider, color }: { message: Message; member?: Member; name: string; provider: 'claude' | 'codex'; color?: string }) {
+  const execution = message.execution
+  return (
+    <div className="tx-agent-head">
+      <AgentMark provider={provider} color={color} size={18} />
+      <span className="tx-agent-name">{name}</span>
+      {member && <span className="tx-agent-handle">@{member.handle}</span>}
+      <span className="tx-agent-time">{timeOf(message.createdAt)}</span>
+      {message.hop ? <span className="tx-agent-hop">relay {message.hop}</span> : null}
+      {execution && (
+        <span className="tx-agent-exec" title="Settings when this reply started; later user changes remain saved">
+          {execution.model || 'Default model'}
+          {execution.effort ? ` · ${execution.effort}` : ''}
+          {execution.delegated ? ' · delegated' : ''}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function AgentFooter({ message, member, provider, latestOfAuthor, roomBusy }: { message: Message; member?: Member; provider: 'claude' | 'codex'; latestOfAuthor: boolean; roomBusy: boolean }) {
+  const { roomId, members, maxHops } = useTranscript()
   const openChange = useApp((s) => s.openChange)
-  const focus = useApp((s) => s.focusMessageId === message.id)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!focus || !ref.current) return
-    ref.current.scrollIntoView({ block: 'center' })
-    ref.current.classList.add('flash')
-    const t = setTimeout(() => ref.current?.classList.remove('flash'), 2000)
-    useApp.setState({ focusMessageId: undefined })
-    return () => clearTimeout(t)
-  }, [focus])
-
-  const copy = (): void => {
-    void navigator.clipboard.writeText(message.text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1200)
-  }
-
-  if (message.author === 'user') {
-    const to = (message.to ?? []).map((id) => room.members.find((m) => m.id === id)?.name ?? '').filter(Boolean)
-    return (
-      <div className="msg msg-user" ref={ref} data-id={message.id}>
-        <div className="user-meta">
-          {room.members.length > 1 && to.length ? `to ${to.join(', ')} · ` : ''}
-          {timeOf(message.createdAt)}
-        </div>
-        {editing ? (
-          <EditBox message={message} room={room} onDone={() => setEditing(false)} />
-        ) : (
-          <div className="user-bubble">
-            <Attachments message={message} roomId={room.id} />
-            <div className="user-text">{message.text}</div>
-          </div>
-        )}
-        {!editing && (
-          <div className="msg-actions">
-            <button className="icon-btn" onClick={copy} title="Copy">
-              <Icon name={copied ? 'check' : 'copy'} size={13} />
+  const [copied, copy] = useCopy(message.text)
+  const handoff = message.handoff
+  const target = handoff && handoff.to !== 'user' && handoff.to !== 'done' ? members.find((m) => m.id === handoff.to) : undefined
+  const snap = message.snapshot
+  const codexCanUndo = snap?.before && snap.after ? snap.before !== snap.after : !!message.diff
+  const changed = changedFiles(message)
+  const canUndo = !roomBusy && !message.undone && !message.sharedChanges && (snap?.after ? codexCanUndo : provider === 'codex' ? codexCanUndo : changed && !!message.turn?.start)
+  const usage = message.usage ? usageText(message.usage) : undefined
+  return (
+    <div className="tx-agent-foot">
+      {handoff && handoff.to !== 'done' && (
+        <span className="tx-handoff" style={target ? ({ '--handoff-color': target.color } as CSSProperties) : undefined}>
+          <Icon name="arrowRight" size={12} />
+          <b>{handoff.to === 'user' ? 'You' : (target?.name ?? 'agent')}</b>
+          {handoff.text && <span className="tx-handoff-text">{handoff.text}</span>}
+          {handoff.overrides && <small>{Object.entries(handoff.overrides).map(([key, value]) => `${key}: ${value || 'default'}`).join(' · ')}</small>}
+          {handoff.error && <small role="alert">{handoff.error}</small>}
+          {target && !message.handoffDone && (message.hop ?? 0) >= maxHops && <small>Automatic hand-off limit reached.</small>}
+          {target && !message.handoffDone && message.status === 'done' && (
+            <button className="btn tiny" disabled={!!handoff.error && !handoff.invalidSettings} onClick={() => void act(() => window.iface.continueHandoff(roomId, message.id))}>
+              Send to {target.name}
             </button>
-            {!roomBusy && (
-              <button className="icon-btn" onClick={() => setEditing(true)} title="Edit and resend">
-                <Icon name="pencil" size={13} />
-              </button>
-            )}
-          </div>
+          )}
+        </span>
+      )}
+      {handoff?.to === 'done' && (
+        <span className="tx-handoff done">
+          <Icon name="check" size={12} /> Done
+        </span>
+      )}
+      <span className="foot-spacer" />
+      <span className="tx-foot-actions">
+        {changed && (
+          <button className="icon-btn" onClick={() => openChange(latestFileActivity(message)?.path ?? '', message.author, message.id)} title="Review this turn's changes in the side panel" aria-label="Review changes">
+            <Icon name="diff" size={13} />
+          </button>
         )}
-      </div>
-    )
-  }
+        {canUndo && (
+          <button
+            className="icon-btn"
+            title={provider === 'claude' ? 'Undo: put files back to how they were before this turn' : 'Undo the file changes from this turn'}
+            aria-label="Undo file changes"
+            onClick={() => {
+              if (confirm('Put the files back to how they were before this turn?')) {
+                void act(() => window.iface.undoTurn(roomId, message.id), (r) => r)
+              }
+            }}
+          >
+            <Icon name="undo" size={13} />
+          </button>
+        )}
+        {latestOfAuthor && member && (
+          <button className="icon-btn" title="Retry this reply" aria-label="Retry this reply" onClick={() => void act(() => window.iface.retry(roomId, message.id))}>
+            <Icon name="refresh" size={13} />
+          </button>
+        )}
+        {message.text && (
+          <button className="icon-btn" onClick={copy} title="Copy reply" aria-label="Copy reply">
+            <Icon name={copied ? 'check' : 'copy'} size={13} />
+          </button>
+        )}
+        {usage && (
+          <span className="tx-usage" title={usage.title}>
+            {usage.text}
+          </span>
+        )}
+      </span>
+    </div>
+  )
+}
 
-  const member = room.members.find((m) => m.id === message.author)
+interface SegmentProps {
+  item: AgentItem
+  /** This is the agent's newest reply (only that one can be retried). */
+  latestOfAuthor: boolean
+  roomBusy: boolean
+  /** Name the agent: the shared chat of a team room, or another agent's turn in a panel. */
+  showHeader: boolean
+}
+
+/** One part of an agent's turn. A turn you wrote into while it ran has a part before and
+ *  a part after your message; the last part carries the plan, live status and footer. */
+export const AgentSegment = memo(function AgentSegment({ item, latestOfAuthor, roomBusy, showHeader }: SegmentProps) {
+  const { roomId, members, folder } = useTranscript()
+  const { message } = item
+  const member = members.find((m) => m.id === message.author)
   const name = member?.name ?? message.authorName ?? 'Agent'
   const provider = member?.provider ?? message.provider ?? 'claude'
   const color = member?.color ?? message.color
+  const dotColor = provider === 'claude' ? 'var(--claude)' : color
   const live = message.status === 'streaming'
-  const answer = (blockId: string) => (d: ApprovalDecision) => void act(() => window.iface.answer(room.id, message.id, blockId, d))
-  const handoff = message.handoff
-  const target = handoff && handoff.to !== 'user' && handoff.to !== 'done' ? room.members.find((m) => m.id === handoff.to) : undefined
-  const lastBlock = message.blocks.length ? message.blocks[message.blocks.length - 1].id : ''
-  const snap = message.snapshot
-  const codexCanUndo = snap?.before && snap.after ? snap.before !== snap.after : !!message.diff
-  const canUndo = !live && !roomBusy && !message.undone && !message.sharedChanges && (snap?.after ? codexCanUndo : provider === 'codex' ? codexCanUndo : changedFiles(message) && !!message.turn?.start)
-  const root = member?.worktree?.path ?? room.folder
+  const root = member?.worktree?.path ?? folder
+  const ref = useFocusFlash(message.id, item.isFirst)
+  const parts = useMemo(() => segmentParts(item.blocks), [item.blocks])
+  const newest = message.blocks[message.blocks.length - 1]
+  const steps = useMemo(() => new Map(parts.map((part) => [part.key, part.kind === 'activity' ? liveStep(part.blocks, live, newest) : undefined])), [parts, live, newest])
+  const answer = (blockId: string) => (d: ApprovalDecision) => void act(() => window.iface.answer(roomId, message.id, blockId, d))
 
   return (
-    <div className={`msg msg-agent`} ref={ref} data-id={message.id}>
-      <div className="agent-head">
-        <AgentMark provider={provider} color={color} size={22} />
-        <span className="agent-name" style={{ color }}>
-          {name}
-        </span>
-        {room.members.length > 1 && member && <span className="handle">@{member.handle}</span>}
-        <span className="agent-time">{timeOf(message.createdAt)}</span>
-        {message.hop ? <span className="hop">relay {message.hop}</span> : null}
-        {message.execution && <span className="execution-note" title="Settings when this reply started; later user changes remain saved">{message.execution.model || 'Default model'}{message.execution.effort ? ` · ${message.execution.effort}` : ''}{message.execution.delegated ? ' · delegated' : ''}</span>}
-        {live && <span className="spinner" />}
-      </div>
-      <div className="agent-body">
-        {message.blocks.map((b) => {
-          switch (b.kind) {
-            case 'text':
-              return b.text.trim() ? <Markdown key={b.id} text={b.text} roomId={room.id} memberId={message.author === 'user' ? undefined : message.author} /> : null
-            case 'thinking':
-              return <Thinking key={b.id} text={b.text} live={live && b.id === lastBlock} />
-            case 'tool':
-              return <ToolCard key={b.id} block={b} root={root} memberId={message.author} messageId={message.id} />
-            case 'approval':
-              return <ApprovalCard key={b.id} block={b} who={name} root={root} roomId={room.id} memberId={message.author} onAnswer={answer(b.id)} />
-            case 'error':
-              return (
-                <div key={b.id} className="error-block">
-                  <Icon name="alert" size={14} /> <span>{b.text}</span>
-                </div>
-              )
-          }
-        })}
-        {live && !message.blocks.length && <div className="placeholder-line">Working…</div>}
-        {message.status === 'stopped' && <div className="stopped-note">Stopped</div>}
-        {message.undone && <div className="stopped-note">File changes from this turn were undone</div>}
-        {message.sharedChanges && changedFiles(message) && <div className="stopped-note">Other agents worked in this folder during this turn. Review changes file by file.</div>}
-      </div>
-      {!live && (
-        <div className="agent-foot">
-          {handoff && handoff.to !== 'done' && (
-            <span className="handoff" style={target ? { background: `${target.color}22` } : undefined}>
-              <Icon name="arrowRight" size={12} />
-              <b>{handoff.to === 'user' ? 'You' : (target?.name ?? 'agent')}</b>
-              {handoff.text && <span className="handoff-text">{handoff.text}</span>}
-              {handoff.overrides && <small>{Object.entries(handoff.overrides).map(([key, value]) => `${key}: ${value || 'default'}`).join(' · ')}</small>}
-              {handoff.error && <small role="alert">{handoff.error}</small>}
-              {target && !message.handoffDone && (message.hop ?? 0) >= room.maxHops && <small>Automatic hand-off limit reached.</small>}
-              {target && !message.handoffDone && message.status === 'done' && (
-                <button className="btn tiny" disabled={!!handoff.error && !handoff.invalidSettings} onClick={() => void act(() => window.iface.continueHandoff(room.id, message.id))}>
-                  Send to {target.name}
-                </button>
-              )}
-            </span>
-          )}
-          {handoff?.to === 'done' && (
-            <span className="handoff handoff-done">
-              <Icon name="check" size={12} /> Done
-            </span>
-          )}
-          <span className="foot-spacer" />
-          {message.usage && (
-            <span className="usage-note" title={usageText(message.usage).title}>
-              {usageText(message.usage).text}
-            </span>
-          )}
-          <span className="msg-actions inline">
-            {changedFiles(message) && (
-              <button className="icon-btn" onClick={() => openChange(latestFileActivity(message)?.path ?? '', message.author, message.id)} title="Review this turn's changes in the side panel">
-                <Icon name="diff" size={13} />
-              </button>
-            )}
-            {canUndo && (
-              <button
-                className="icon-btn"
-                title={provider === 'claude' ? 'Undo: put files back to how they were before this turn' : 'Undo the file changes from this turn'}
-                onClick={() => {
-                  if (confirm('Put the files back to how they were before this turn?')) {
-                    void act(() => window.iface.undoTurn(room.id, message.id), (r) => r)
-                  }
-                }}
-              >
-                <Icon name="undo" size={13} />
-              </button>
-            )}
-            {latestOfAuthor && member && (
-              <button className="icon-btn" title="Retry this reply" onClick={() => void act(() => window.iface.retry(room.id, message.id))}>
-                <Icon name="refresh" size={13} />
-              </button>
-            )}
-            {message.text && (
-              <button className="icon-btn" onClick={copy} title="Copy reply">
-                <Icon name={copied ? 'check' : 'copy'} size={13} />
-              </button>
-            )}
-          </span>
+    <div className={`tx-agent ${item.isFirst ? 'first' : 'cont'} ${item.isLast ? 'last' : ''}`} ref={ref} data-id={item.isFirst ? message.id : undefined} style={color ? ({ '--agent-color': color } as CSSProperties) : undefined}>
+      {showHeader && (item.isFirst ? (
+        <AgentHeader message={message} member={member} name={name} provider={provider} color={color} />
+      ) : (
+        <div className="tx-agent-cont">
+          <AgentMark provider={provider} color={color} size={14} />
+          <span>{name}</span>
         </div>
-      )}
+      ))}
+      {item.plan && <PlanCard plan={item.plan} live={live} />}
+      {parts.map((part) => {
+        switch (part.kind) {
+          case 'text':
+            return <Markdown key={part.key} text={part.block.text} roomId={roomId} memberId={message.author} />
+          case 'activity':
+            return <ActivityGroup key={part.key} blocks={part.blocks} step={steps.get(part.key)} root={root} memberId={message.author} messageId={message.id} color={dotColor} />
+          case 'approval':
+            return <ApprovalCard key={part.key} block={part.block} who={name} root={root} roomId={roomId} memberId={message.author} onAnswer={answer(part.block.id)} />
+          case 'error':
+            return (
+              <div key={part.key} className="error-block">
+                <Icon name="alert" size={14} /> <span>{part.block.text}</span>
+              </div>
+            )
+        }
+      })}
+      {live && item.isLast && <LiveStatus message={message} roomId={roomId} color={dotColor} />}
+      {item.isLast && message.status === 'stopped' && <div className="tx-note">Stopped</div>}
+      {item.isLast && message.undone && <div className="tx-note">File changes from this turn were undone</div>}
+      {item.isLast && message.sharedChanges && changedFiles(message) && <div className="tx-note">Other agents worked in this folder during this turn. Review changes file by file.</div>}
+      {item.isLast && !live && <AgentFooter message={message} member={member} provider={provider} latestOfAuthor={latestOfAuthor} roomBusy={roomBusy} />}
     </div>
   )
 })

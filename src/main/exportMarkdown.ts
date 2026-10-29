@@ -160,9 +160,12 @@ function messageMarkdown(message: Message, index: number, room: Room, options: C
   const parts = [
     `## ${index + 1}. ${inline(author)}`,
     '',
-    `- Sent: ${timestamp(message.createdAt)}`,
+    // A queued message was written first and sent (if ever) when its turn came.
+    message.queued || message.sentAt !== undefined ? `- Written: ${timestamp(message.createdAt)}` : `- Sent: ${timestamp(message.createdAt)}`,
     `- Status: ${message.status}`
   ]
+  if (message.queued) parts.push('- Queued: waiting for the current turn, not sent yet')
+  else if (message.sentAt !== undefined) parts.push(`- Sent: ${timestamp(message.sentAt)}`)
   if (message.author !== 'user' && provider) parts.push(`- Provider: ${PROVIDER_LABEL[provider]}`)
   if (message.to !== undefined) parts.push(`- Recipients: ${message.to.length ? message.to.map((id) => inline(who(room, id))).join(', ') : 'none recorded'}`)
   if (message.hop !== undefined) parts.push(`- Relay hop: ${message.hop}`)

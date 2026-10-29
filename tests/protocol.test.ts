@@ -147,6 +147,13 @@ describe('forwarding', () => {
     expect(pendingFor('a', [a, b, c, d, e])).toEqual([a, c])
   })
 
+  it('holds back messages queued for later until they are sent', () => {
+    const queued = msg({ text: 'later', queued: true })
+    const sent = msg({ text: 'sent now', sentAt: 5 })
+    expect(pendingFor('a', [queued, sent])).toEqual([sent])
+    expect(pendingFor('b', [queued])).toEqual([])
+  })
+
   it('sends solo rooms exactly what was typed, with no room protocol', () => {
     expect(formatUpdate(solo.members[0], [msg({ text: '/compact' })], solo)).toBe('/compact')
     expect(systemPrompt(solo.members[0], solo)).toBeUndefined()
@@ -192,6 +199,27 @@ describe('usage', () => {
     ])
     expect(r.limits[2].detail).toBe('$12.50 of $50.00')
     expect(r.plan).toBe('pro')
+  })
+
+  it('names model-scoped Claude limits instead of printing objects', () => {
+    const r = claudeLimits({
+      rate_limits: {
+        limits: [
+          { kind: 'session', group: 'session', percent: 0, scope: null },
+          { kind: 'weekly_all', group: 'weekly', percent: 1, resets_at: '2026-11-05T12:00:00Z', scope: null },
+          { kind: 'weekly_scoped', group: 'weekly', percent: 4, resets_at: '2026-11-05T12:00:00Z', scope: { model: { display_name: 'Fable', id: null }, surface: null } },
+          { kind: 'weekly_scoped', group: 'weekly', percent: 2, scope: { model: null, surface: { display_name: 'Claude Code' } } },
+          { kind: 'weekly_scoped', group: 'weekly', percent: 3, scope: 'design' }
+        ],
+        weekly_scoped_shares: [{ limit_index: 2, used_percent_of_weekly: 0, allowance_percent_of_weekly: 50 }],
+        seven_day_breakdown: { rows: [{ key: 'claude_code', display_name: 'Claude Code', percent: 3 }, { key: 'cowork', display_name: 'Cowork', percent: 79 }, { key: 'other', display_name: 'Other', percent: 0 }] }
+      }
+    })
+    expect(r.limits.map((l) => l.label)).toEqual(['5-hour session', 'Weekly · all models', 'Weekly · Fable', 'Weekly · Claude Code', 'Weekly · design'])
+    expect(r.limits.some((l) => l.label.includes('[object'))).toBe(false)
+    expect(new Set(r.limits.map((l) => l.id)).size).toBe(r.limits.length)
+    expect(r.limits[2]).toMatchObject({ id: 'weekly_scoped:fable', percent: 4, detail: 'Fable can use up to 50% of the weekly limit' })
+    expect(r.notes).toContain('This week by app: Cowork 79% · Claude Code 3%')
   })
 
   it('reads Codex limits', () => {

@@ -236,6 +236,8 @@ const api: IfaceApi = {
 
   send: async (roomId, input) => rooms.send(roomId, input),
   stop: async (roomId, memberId) => rooms.stop(roomId, memberId),
+  cancelQueued: async (roomId, messageId) => rooms.cancelQueued(roomId, messageId),
+  sendQueuedNow: async (roomId, messageId) => rooms.sendQueuedNow(roomId, messageId),
   answer: async (roomId, messageId, blockId, decision) => rooms.answer(roomId, messageId, blockId, decision),
   continueHandoff: async (roomId, messageId) => rooms.continueHandoff(roomId, messageId),
   retry: (roomId, messageId) => rooms.retry(roomId, messageId),

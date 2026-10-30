@@ -10,6 +10,7 @@ import type {
   Attachment,
   FileContent,
   FileEntry,
+  FileLinkTarget,
   GitState,
   InitialState,
   McpServer,
@@ -17,6 +18,7 @@ import type {
   Message,
   NewRoomInput,
   Provider,
+  QueuedDraft,
   Room,
   RoomUpdate,
   SearchHit,
@@ -27,6 +29,10 @@ export interface IfaceApi {
   getState(): Promise<InitialState>
   checkAgents(): Promise<AgentsInfo>
   pickFolder(): Promise<string | null>
+  /** Adds a folder as a project, or moves an existing one to the top. */
+  addProject(folder: string): Promise<AppSettings>
+  /** Takes a project without sessions off the list; its folder is untouched. */
+  removeProject(folder: string): Promise<AppSettings>
 
   // rooms
   createRoom(input: NewRoomInput): Promise<Room>
@@ -41,7 +47,12 @@ export interface IfaceApi {
 
   // conversation
   send(roomId: string, input: SendInput): Promise<Message | undefined>
-  stop(roomId: string, memberId?: string): Promise<void>
+  /** Stops the turn and takes back messages queued for it, so the composer can restore them. */
+  stop(roomId: string, memberId?: string): Promise<QueuedDraft[]>
+  /** Removes a queued message that has not started; returns it for editing. */
+  cancelQueued(roomId: string, messageId: string): Promise<QueuedDraft | undefined>
+  /** Delivers a queued message now, as feedback to the running turn. */
+  sendQueuedNow(roomId: string, messageId: string): Promise<void>
   answer(roomId: string, messageId: string, blockId: string, decision: ApprovalDecision): Promise<void>
   continueHandoff(roomId: string, messageId: string): Promise<void>
   retry(roomId: string, messageId: string): Promise<void>
@@ -72,6 +83,7 @@ export interface IfaceApi {
   discardWorktree(roomId: string, memberId: string): Promise<string>
 
   // files
+  resolveFileLink(roomId: string, href: string, memberId?: string, fromFile?: string): Promise<FileLinkTarget>
   listDir(path: string, showHidden?: boolean): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>
   watchDir(path: string): Promise<void>
@@ -100,6 +112,8 @@ export const API_METHODS: Array<keyof IfaceApi> = [
   'getState',
   'checkAgents',
   'pickFolder',
+  'addProject',
+  'removeProject',
   'createRoom',
   'getRoom',
   'renameRoom',
@@ -111,6 +125,8 @@ export const API_METHODS: Array<keyof IfaceApi> = [
   'removeMember',
   'send',
   'stop',
+  'cancelQueued',
+  'sendQueuedNow',
   'answer',
   'continueHandoff',
   'retry',
@@ -135,6 +151,7 @@ export const API_METHODS: Array<keyof IfaceApi> = [
   'gitDiff',
   'mergeWorktree',
   'discardWorktree',
+  'resolveFileLink',
   'listDir',
   'readFile',
   'watchDir',

@@ -1,0 +1,630 @@
+/* Composer in the style of Claude desktop: queued tray, rounded box with "+" on the left
+   and send/stop on the right, and the agent settings in a quiet row below the box. */
+
+.cmp {
+  position: relative;
+  flex: none;
+  width: 100%;
+  max-width: 876px;
+  margin: 0 auto;
+  padding: 0 28px 10px;
+}
+
+.cmp-box {
+  position: relative;
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(0, 0, 0, 0.04);
+  padding: 8px;
+  cursor: text;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.cmp-box:focus-within {
+  border-color: color-mix(in srgb, var(--text-3) 55%, var(--border-strong));
+}
+.cmp-box.dragging {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+/* "+" | text and attachments | stop and send. Buttons stay on the last line of text. */
+.cmp-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 4px;
+}
+.cmp-main {
+  min-width: 0;
+  padding: 0 4px;
+}
+.cmp-main textarea {
+  display: block;
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.5;
+  max-height: 320px;
+  padding: 5px 0;
+}
+.cmp-main textarea::placeholder {
+  color: var(--text-3);
+}
+
+.cmp-round-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.cmp-round-btn:hover,
+.cmp-round-btn.on {
+  background: var(--hover);
+  color: var(--text);
+}
+.cmp-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cmp-send {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--claude);
+  color: #fff;
+  flex: none;
+  cursor: pointer;
+}
+.cmp-send:disabled {
+  background: var(--active);
+  color: var(--text-3);
+  cursor: default;
+}
+.cmp-stop {
+  color: var(--text);
+}
+.cmp-stop-square {
+  width: 11px;
+  height: 11px;
+  border-radius: 2.5px;
+  background: currentColor;
+}
+
+/* The "+" menu reuses the shared menu look. */
+.cmp-box .popover {
+  cursor: default;
+}
+.cmp-plus-menu {
+  min-width: 230px;
+}
+.cmp-plus-menu .menu-item.row {
+  color: var(--text);
+  padding: 7px 8px;
+}
+.cmp-plus-menu .menu-item.row svg,
+.cmp-glyph {
+  width: 16px;
+  flex: none;
+  color: var(--text-2);
+  text-align: center;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+/* ---------- attachments ---------- */
+
+.cmp-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 6px;
+}
+.cmp-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  flex: none;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.cmp-thumb-open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  cursor: zoom-in;
+}
+.cmp-thumb-open img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cmp-thumb-saving {
+  display: grid;
+  place-items: center;
+}
+.cmp-thumb-remove,
+.cmp-file-remove {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.cmp-thumb-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(20, 20, 19, 0.72);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.cmp-thumb:hover .cmp-thumb-remove,
+.cmp-thumb-remove:focus-visible {
+  opacity: 1;
+}
+.cmp-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 240px;
+  height: 32px;
+  padding: 0 4px 0 9px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.cmp-file-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: inherit;
+  cursor: pointer;
+}
+.cmp-file-open span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cmp-file-open:hover {
+  color: var(--text);
+}
+.cmp-file-remove {
+  color: var(--text-3);
+}
+.cmp-file-remove:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* ---------- team recipients ---------- */
+
+.cmp-targets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px 6px;
+}
+.cmp-targets-label {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-right: 2px;
+}
+.cmp-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px 0 5px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.cmp-target:not(.on) {
+  opacity: 0.6;
+}
+.cmp-target:not(.on):hover {
+  opacity: 1;
+}
+.cmp-target.on {
+  color: var(--text);
+}
+.cmp-target.locked {
+  cursor: default;
+}
+.cmp-target-check {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 4px;
+  border: 1.5px solid var(--text-3);
+  color: #fff;
+}
+.cmp-target-all {
+  padding: 0 9px;
+  border-style: dashed;
+}
+.cmp-hint {
+  color: var(--text-3);
+  font-size: 11px;
+  padding: 0 4px 6px;
+}
+.cmp-pane-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px 4px;
+  font-size: 10px;
+  color: var(--text-2);
+}
+.cmp-pane-label span {
+  color: var(--text-3);
+}
+
+/* ---------- @ and / suggestions ---------- */
+
+.cmp-suggest {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+.cmp-suggest-title {
+  padding: 4px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.cmp-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.cmp-suggest-item.on {
+  background: var(--hover);
+  color: var(--text);
+}
+.cmp-suggest-item > svg {
+  flex: none;
+}
+.cmp-suggest-label {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.cmp-suggest-label.file {
+  flex: 1;
+  max-width: none;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 400;
+  direction: rtl;
+  text-align: left;
+}
+.cmp-suggest-detail {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ---------- queued messages ---------- */
+
+.cmp-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 10px;
+  padding: 6px 6px 4px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 14px 14px 0 0;
+  background: var(--surface-2);
+}
+.cmp-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.cmp-queue-row:hover {
+  background: var(--hover);
+}
+.cmp-queue-icon {
+  flex: none;
+  color: var(--text-3);
+}
+.cmp-queue-label {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.cmp-queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.cmp-queue-thumb {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 5px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+.cmp-queue-count,
+.cmp-queue-to {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.cmp-queue-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.cmp-queue-send {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+.cmp-queue-send:hover {
+  background: var(--hover);
+}
+.cmp-queue-note {
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: default;
+}
+.cmp-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.cmp-icon-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.cmp-queue-hint {
+  padding: 2px 8px 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ---------- settings row below the box ---------- */
+
+.cmp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  min-height: 30px;
+  padding: 4px 6px 0;
+}
+.cmp-spacer {
+  flex: 1;
+}
+.cmp-controls .pill-btn {
+  height: 26px;
+  padding: 0 7px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.cmp-controls .pill-btn:hover,
+.cmp-controls .pill-btn.on {
+  color: var(--text);
+}
+.cmp-controls .pill-btn.risky {
+  color: var(--danger);
+}
+.cmp-controls .pill-btn .muted {
+  color: var(--text-3);
+}
+.cmp-controls .pill-caret {
+  opacity: 0;
+  margin-left: -2px;
+  transition: opacity 0.12s ease;
+}
+.cmp-controls .pill-btn:hover .pill-caret,
+.cmp-controls .pill-btn.on .pill-caret,
+.cmp-controls .pill-btn:focus-visible .pill-caret {
+  opacity: 1;
+}
+.cmp-controls .context-ring {
+  padding: 0 4px;
+}
+.cmp-controls-team {
+  gap: 2px 10px;
+}
+.cmp-member-group {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.cmp-member-group + .cmp-member-group {
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+/* In the agent-panel layout each panel has its own settings. */
+.room-panes > .cmp > .cmp-controls {
+  display: none;
+}
+.room-panes > .cmp {
+  padding-bottom: 18px;
+}
+
+/* ---------- pane composers ---------- */
+
+.cmp-scoped {
+  max-width: none;
+  margin: 0;
+  padding: 0 10px 10px;
+}
+.cmp-scoped .cmp-box {
+  border-radius: 14px;
+  padding: 6px;
+}
+.cmp-scoped .cmp-main textarea {
+  font-size: 12.5px;
+  max-height: 100px;
+  padding: 4px 0;
+}
+.cmp-scoped .cmp-round-btn,
+.cmp-scoped .cmp-send {
+  width: 28px;
+  height: 28px;
+}
+.cmp-scoped .cmp-stop-square {
+  width: 10px;
+  height: 10px;
+}
+.cmp-scoped .cmp-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+}
+.cmp-scoped .cmp-queue {
+  margin: 0 6px;
+}
+.cmp-scoped .cmp-queue-row {
+  font-size: 12px;
+}
+.cmp-scoped .cmp-suggest {
+  max-height: 240px;
+}
+
+@container (max-width: 620px) {
+  .cmp {
+    padding: 0 12px 8px;
+  }
+  .cmp-controls-team {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .cmp-member-group {
+    flex-shrink: 0;
+  }
+  .cmp-targets {
+    max-height: 76px;
+    overflow-y: auto;
+  }
+  .cmp-main textarea {
+    max-height: min(160px, 25vh);
+  }
+  .cmp-queue-to {
+    display: none;
+  }
+}
+
+@container conversation (max-height: 500px) {
+  .cmp {
+    padding: 0 12px 6px;
+  }
+  /* The composer itself never scrolls (that would clip the suggestion popover above the
+     box); its tall parts scroll on their own instead. */
+  .cmp-queue {
+    max-height: 64px;
+    overflow-y: auto;
+  }
+  .cmp-suggest {
+    max-height: 55cqh;
+  }
+  .cmp-box {
+    padding: 4px 6px;
+    border-radius: 12px;
+  }
+  .cmp-targets {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-height: 34px;
+  }
+  .cmp-target {
+    flex-shrink: 0;
+  }
+  .cmp-hint {
+    padding: 1px 2px;
+    font-size: 10px;
+  }
+  .cmp-main textarea {
+    max-height: 60px;
+  }
+  .cmp-controls-team {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+}

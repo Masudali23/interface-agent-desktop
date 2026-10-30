@@ -13,13 +13,25 @@ import type {
   SearchHit
 } from '@shared/types'
 import { terminalBus } from './lib/bus'
+import { searchBlocked } from './lib/chrome'
 import { latestFileActivity } from '@shared/changes'
+import { linkKind } from '@shared/links'
 
 /** Stable empty values for selectors (a new [] on every read would re-render forever). */
 export const EMPTY: never[] = []
 
-export type Panel = 'files' | 'tasks' | 'changes' | 'mcp'
+export type Panel = 'session' | 'files' | 'tasks' | 'changes' | 'mcp'
 export type SettingsTab = 'accounts' | 'defaults' | 'agents' | 'app'
+export interface PreviewTarget {
+  path: string
+  line?: number
+  column?: number
+  fragment?: string
+  isDirectory?: boolean
+  memberId?: string
+  revision?: number
+}
+export interface LinkContext { roomId?: string; memberId?: string; fromFile?: string }
 
 interface State {
   ready: boolean
@@ -35,7 +47,9 @@ interface State {
   statuses: Record<string, Record<string, AgentRuntime>>
   sidebarOpen: boolean
   panel: Panel | null
-  preview?: { path: string; diff?: { memberId?: string } }
+  preview?: PreviewTarget
+  previewHistory: PreviewTarget[]
+  previewIndex: number
   changeTarget?: { path: string; memberId?: string; messageId?: string }
   followChanges: boolean
   panelWidth: number
@@ -46,6 +60,7 @@ interface State {
   dirVersion: Record<string, number>
   error?: string
   notice?: string
+  searchOpen: boolean
   searchQuery: string
   searchHits: SearchHit[]
   focusMessageId?: string
@@ -55,8 +70,13 @@ interface State {
   setMode(mode: RoomKind): void
   openNewSession(folder?: string, kind?: RoomKind): void
   closeNewSession(): void
+  /** Asks for a folder, adds it as a project and starts a session in it. */
+  addProject(): Promise<void>
+  removeProject(folder: string): Promise<void>
   setPanel(panel: Panel | null): void
   setPreview(preview: State['preview']): void
+  navigatePreview(index: number): void
+  openLink(href: string, context?: LinkContext): Promise<void>
   openChange(path: string, memberId?: string, messageId?: string): void
   setFollowChanges(follow: boolean): void
   setPanelWidth(width: number): void
@@ -66,6 +86,7 @@ interface State {
   setTerminal(open: boolean): void
   setError(error: string | undefined): void
   setNotice(notice: string | undefined): void
+  setSearchOpen(open: boolean): void
   search(query: string): Promise<void>
 }
 
@@ -97,6 +118,7 @@ function upsert(messages: Message[], message: Message): Message[] {
 }
 
 let searchSeq = 0
+let previewSeq = 0
 
 export const useApp = create<State>((set, get) => {
   const onEvent = (e: AppEvent): void => {
@@ -110,7 +132,7 @@ export const useApp = create<State>((set, get) => {
           const changed = activity && activity.key !== (previous && latestFileActivity(previous)?.key)
           set({
             roomData: { ...s.roomData, [e.roomId]: { ...room, messages: upsert(room.messages, e.message) } },
-            ...(changed && s.followChanges && s.currentRoomId === e.roomId ? {
+            ...(changed && s.followChanges && !s.preview && s.currentRoomId === e.roomId ? {
               panel: 'changes' as const,
               preview: undefined,
               changeTarget: { path: activity.path, memberId: e.message.author }
@@ -141,12 +163,14 @@ export const useApp = create<State>((set, get) => {
         return
       }
       case 'room-deleted': {
+        if (s.currentRoomId === e.roomId) ++previewSeq
         const roomData = { ...s.roomData }
         delete roomData[e.roomId]
         set({
           rooms: s.rooms.filter((r) => r.id !== e.roomId),
           roomData,
-          currentRoomId: s.currentRoomId === e.roomId ? undefined : s.currentRoomId
+          currentRoomId: s.currentRoomId === e.roomId ? undefined : s.currentRoomId,
+          ...(s.currentRoomId === e.roomId ? { preview: undefined, previewHistory: [], previewIndex: -1 } : {})
         })
         return
       }
@@ -177,14 +201,11 @@ export const useApp = create<State>((set, get) => {
       case 'menu': {
         const folder = s.currentRoomId ? s.roomData[s.currentRoomId]?.folder : undefined
         if (e.action === 'new-room') get().openNewSession(folder)
-        if (e.action === 'open-folder') get().openNewSession()
+        if (e.action === 'open-folder') void get().addProject()
         if (e.action === 'settings') get().openSettings()
         if (e.action === 'toggle-sidebar') set({ sidebarOpen: !s.sidebarOpen })
         if (e.action === 'toggle-terminal') set({ terminalOpen: !s.terminalOpen })
-        if (e.action === 'search') {
-          set({ sidebarOpen: true })
-          setTimeout(() => document.getElementById('sidebar-search')?.focus(), 50)
-        }
+        if (e.action === 'search') get().setSearchOpen(true)
         return
       }
     }
@@ -201,12 +222,15 @@ export const useApp = create<State>((set, get) => {
     statuses: {},
     sidebarOpen: true,
     panel: null,
+    previewHistory: [],
+    previewIndex: -1,
     followChanges: stored('iface.followChanges') !== 'false',
     panelWidth: Math.max(320, Math.min(1000, Number(stored('iface.panelWidth')) || 560)),
     settingsOpen: false,
     settingsTab: 'accounts',
     terminalOpen: false,
     dirVersion: {},
+    searchOpen: false,
     searchQuery: '',
     searchHits: [],
 
@@ -228,8 +252,9 @@ export const useApp = create<State>((set, get) => {
     },
 
     async openRoom(id, messageId) {
+      ++previewSeq
       if (!id) {
-        set({ currentRoomId: undefined, preview: undefined, changeTarget: undefined })
+        set({ currentRoomId: undefined, preview: undefined, previewHistory: [], previewIndex: -1, changeTarget: undefined })
         return
       }
       const res = await window.iface.getRoom(id)
@@ -237,6 +262,8 @@ export const useApp = create<State>((set, get) => {
       set((s) => ({
         currentRoomId: id,
         preview: undefined,
+        previewHistory: [],
+        previewIndex: -1,
         changeTarget: undefined,
         mode: res.room.kind,
         roomData: { ...s.roomData, [id]: res.room },
@@ -252,18 +279,64 @@ export const useApp = create<State>((set, get) => {
       set({ mode })
     },
     openNewSession(folder, kind) {
+      get().setSearchOpen(false)
       set((s) => ({ newSession: { folder, kind: kind ?? s.mode } }))
     },
     closeNewSession() {
       set({ newSession: undefined })
     },
+    async addProject() {
+      const folder = await act(() => window.iface.pickFolder())
+      if (!folder) return
+      const settings = await act(() => window.iface.addProject(folder))
+      if (!settings) return
+      set({ settings })
+      // The project goes first, so its folder is the one just saved, not the picker's spelling.
+      get().openNewSession(settings.projects[0]?.folder ?? folder)
+    },
+    async removeProject(folder) {
+      const settings = await act(() => window.iface.removeProject(folder))
+      if (settings) set({ settings })
+    },
     setPanel(panel) {
+      ++previewSeq
       set({ panel, preview: undefined })
     },
     setPreview(preview) {
-      set((s) => ({ preview, panel: preview ? (s.panel ?? 'files') : s.panel }))
+      const revision = ++previewSeq
+      if (!preview) { set({ preview: undefined }); return }
+      const target = { ...preview, revision }
+      set((s) => {
+        const previous = s.previewHistory[s.previewIndex]
+        const same = previous && previous.path === target.path && previous.line === target.line && previous.column === target.column && previous.fragment === target.fragment
+        const history = same ? s.previewHistory.slice(0, s.previewIndex) : s.previewHistory.slice(0, s.previewIndex + 1)
+        history.push(target)
+        return { preview: target, previewHistory: history.slice(-50), previewIndex: Math.min(history.length, 50) - 1, panel: s.panel ?? 'files' }
+      })
+    },
+    navigatePreview(index) {
+      const target = get().previewHistory[index]
+      if (!target) return
+      set({ preview: { ...target, revision: ++previewSeq }, previewIndex: index, panel: get().panel ?? 'files' })
+    },
+    async openLink(href, context = {}) {
+      const kind = linkKind(href)
+      if (kind === 'web') { await window.iface.openExternal(href.trim()); return }
+      if (kind === 'unsupported') throw new Error('This link type cannot be opened in Interface.')
+      if (kind === 'anchor' && !context.fromFile) throw new Error('This section is not in the current document.')
+      const roomId = context.roomId ?? get().currentRoomId
+      if (!roomId) throw new Error('Open a project before opening a local file.')
+      const seq = ++previewSeq
+      try {
+        const target = await window.iface.resolveFileLink(roomId, href, context.memberId, context.fromFile)
+        if (seq !== previewSeq || get().currentRoomId !== roomId) return
+        get().setPreview({ ...target, memberId: context.memberId })
+      } catch (error) {
+        if (seq === previewSeq && get().currentRoomId === roomId) throw error
+      }
     },
     openChange(path, memberId, messageId) {
+      ++previewSeq
       set({ panel: 'changes', preview: undefined, changeTarget: { path, memberId, messageId } })
     },
     setFollowChanges(followChanges) {
@@ -279,6 +352,7 @@ export const useApp = create<State>((set, get) => {
       set({ sidebarOpen })
     },
     openSettings(tab) {
+      get().setSearchOpen(false)
       set((s) => ({ settingsOpen: true, settingsTab: tab ?? s.settingsTab }))
     },
     closeSettings() {
@@ -293,6 +367,14 @@ export const useApp = create<State>((set, get) => {
     setNotice(notice) {
       set({ notice })
       if (notice) setTimeout(() => get().notice === notice && set({ notice: undefined }), 5000)
+    },
+    setSearchOpen(open) {
+      if (open) {
+        if (!searchBlocked(get())) set({ searchOpen: true })
+      } else if (get().searchOpen) {
+        ++searchSeq
+        set({ searchOpen: false, searchQuery: '', searchHits: [] })
+      }
     },
     async search(query) {
       const seq = ++searchSeq

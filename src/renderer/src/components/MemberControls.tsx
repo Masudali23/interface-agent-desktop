@@ -1,33 +1,58 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { Member, ModelOption, Room } from '@shared/types'
 import { CODEX_MODES, effortLabel, PERMISSION_MODES } from '../lib/options'
 import { act, useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
 
 /** A small menu that opens above (or below) its button and closes on an outside click or Escape. */
-export function Popover({ button, children, className = '', align = 'left' }: { button: (open: boolean, toggle: () => void) => ReactNode; children: (close: () => void) => ReactNode; className?: string; align?: 'left' | 'right' }) {
+export function Popover({ button, children, className = '', align = 'left', portal = false }: { button: (open: boolean, toggle: () => void) => ReactNode; children: (close: () => void) => ReactNode; className?: string; align?: 'left' | 'right'; portal?: boolean }) {
   const [open, setOpen] = useState(false)
   const [place, setPlace] = useState<CSSProperties | undefined>()
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  /** The button edges a portaled menu was placed against, to notice when the button moves. */
+  const placedAt = useRef<{ right: boolean; up: boolean; x: number; y: number } | undefined>(undefined)
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setOpen(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
+      const focused = document.activeElement
+      const inMenu = !!focused && !!menuRef.current?.contains(focused)
+      if (e.key === 'Escape') {
+        setOpen(false)
+        // Back to the button that opened it, so keyboard users keep their place.
+        if (inMenu) ref.current?.querySelector<HTMLElement>('button')?.focus()
+        return
+      }
+      // Up and down move between the items; other controls keep their own arrow keys.
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && inMenu && focused instanceof HTMLElement && focused.matches('.menu-item')) {
+        const items = [...menuRef.current!.querySelectorAll<HTMLElement>('.menu-item:not(:disabled)')]
+        const next = items.indexOf(focused) + (e.key === 'ArrowDown' ? 1 : -1)
+        items[(next + items.length) % items.length]?.focus()
+        e.preventDefault()
+      }
     }
     const onResize = (): void => setOpen(false)
+    // A portaled menu is placed once, so it closes when its button scrolls away. Scrolls that
+    // leave the button where it is, like the transcript following a streaming reply, don't count.
+    const onScroll = (e: Event): void => {
+      const target = e.target
+      if (portal && target instanceof Node && !menuRef.current?.contains(target) && !!ref.current && target.contains(ref.current)) setOpen(false)
+    }
     window.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey)
     window.addEventListener('resize', onResize)
+    if (portal) window.addEventListener('scroll', onScroll, true)
     return () => {
       window.removeEventListener('mousedown', onDown)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('resize', onResize)
+      if (portal) window.removeEventListener('scroll', onScroll, true)
     }
-  }, [open])
+  }, [open, portal])
   // Keep the whole menu on screen: open towards the side with more room and limit its
   // height to that space, so no item (like the first models in a long list) is cut off.
   useLayoutEffect(() => {
@@ -45,6 +70,15 @@ export function Popover({ button, children, className = '', align = 'left' }: { 
     const height = menu.scrollHeight
     const prefersUp = menu.getBoundingClientRect().top < anchor.top
     const up = prefersUp ? height <= above || above >= below : !(height <= below || below >= above)
+    if (portal) {
+      const right = align === 'right'
+      placedAt.current = { right, up, x: right ? anchor.right : anchor.left, y: up ? anchor.top : anchor.bottom }
+      const width = Math.min(menu.getBoundingClientRect().width, window.innerWidth - margin * 2)
+      setPlace({ position: 'fixed', left: Math.max(margin, Math.min(align === 'right' ? anchor.right - width : anchor.left, window.innerWidth - width - margin)), right: 'auto',
+        top: up ? 'auto' : anchor.bottom + gap, bottom: up ? window.innerHeight - anchor.top + gap : 'auto',
+        maxHeight: Math.max(120, up ? above : below), maxWidth: window.innerWidth - margin * 2, zIndex: 1000 })
+      return
+    }
     const next: CSSProperties = up
       ? { top: 'auto', bottom: `calc(100% + ${gap}px)`, maxHeight: Math.max(120, above) }
       : { bottom: 'auto', top: `calc(100% + ${gap}px)`, maxHeight: Math.max(120, below) }
@@ -52,15 +86,29 @@ export function Popover({ button, children, className = '', align = 'left' }: { 
     if (rect.right > window.innerWidth - margin) next.transform = `translateX(${Math.round(window.innerWidth - margin - rect.right)}px)`
     else if (rect.left < margin) next.transform = `translateX(${Math.round(margin - rect.left)}px)`
     setPlace(next)
-  }, [open, place])
+  }, [open, place, portal, align])
+  // A portaled menu sits at the end of the page, out of the Tab order, so its chosen (or
+  // first) item takes focus when it opens. It is placed once, so it closes if the edges of
+  // its button it was placed against move, e.g. when the sidebar reorders projects. A
+  // button whose label changes width (picking an effort) keeps the menu open.
+  useEffect(() => {
+    if (!open || !portal || !place) return
+    const items = menuRef.current
+    ;(items?.querySelector<HTMLElement>('.menu-item.on:not(:disabled)') ?? items?.querySelector<HTMLElement>('.menu-item:not(:disabled)'))?.focus({ preventScroll: true })
+    let frame = requestAnimationFrame(function follow() {
+      const now = ref.current?.getBoundingClientRect()
+      const at = placedAt.current
+      if (!now || !at) return
+      if (Math.abs((at.right ? now.right : now.left) - at.x) > 2 || Math.abs((at.up ? now.top : now.bottom) - at.y) > 2) return setOpen(false)
+      frame = requestAnimationFrame(follow)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [open, portal, place])
+  const menu = open ? <div ref={menuRef} className={`popover menu align-${align}`} style={place ?? { visibility: 'hidden' }}>{children(() => setOpen(false))}</div> : null
   return (
     <div className={`pop-anchor ${className}`} ref={ref}>
       {button(open, () => setOpen(!open))}
-      {open && (
-        <div ref={menuRef} className={`popover menu align-${align}`} style={place ?? { visibility: 'hidden' }}>
-          {children(() => setOpen(false))}
-        </div>
-      )}
+      {portal && menu ? createPortal(menu, document.body) : menu}
     </div>
   )
 }
@@ -79,19 +127,21 @@ function update(room: Room, member: Member, patch: Partial<Member['settings']>):
 }
 
 /** Model picker, like the one in Claude desktop and the Codex app. */
-export function ModelMenu({ room, member, compact = false }: { room: Room; member: Member; compact?: boolean }) {
+export function ModelMenu({ room, member, compact = false, portal = false, align = 'left' }: { room: Room; member: Member; compact?: boolean; portal?: boolean; align?: 'left' | 'right' }) {
   const models = useMemberModels(member)
   const s = member.settings
   const selected = models.find((m) => m.id === s.model) ?? models.find((m) => (s.model ? false : m.isDefault))
   const efforts = selected?.efforts ?? []
   return (
     <Popover
+      portal={portal}
+      align={align}
       button={(open, toggle) => (
         <button className={`pill-btn ${open ? 'on' : ''}`} onClick={toggle} title="Model and effort">
           {compact && <AgentMark provider={member.provider} color={member.color} size={14} />}
           <span>{modelLabel(models, s.model)}</span>
           {s.effort ? <span className="muted">· {effortLabel(s.effort)}</span> : null}
-          <Icon name="chevronDown" size={11} />
+          <Icon name="chevronDown" size={11} className="pill-caret" />
         </button>
       )}
     >
@@ -131,18 +181,19 @@ export function ModelMenu({ room, member, compact = false }: { room: Room; membe
 }
 
 /** Permission mode (Claude) or sandbox mode (Codex). */
-export function ModeMenu({ room, member }: { room: Room; member: Member }) {
+export function ModeMenu({ room, member, portal = false }: { room: Room; member: Member; portal?: boolean }) {
   const options = member.provider === 'claude' ? PERMISSION_MODES : CODEX_MODES
   const value = member.provider === 'claude' ? member.settings.permissionMode : member.settings.codexMode
   const current = options.find((o) => o.value === value)
   const risky = value === 'bypassPermissions' || value === 'full'
   return (
     <Popover
+      portal={portal}
       button={(open, toggle) => (
         <button className={`pill-btn ${open ? 'on' : ''} ${risky ? 'risky' : ''}`} onClick={toggle} title={current?.hint}>
-          <Icon name="shield" size={12} />
+          <Icon name="shield" size={12} className="pill-icon" />
           <span>{current?.label}</span>
-          <Icon name="chevronDown" size={11} />
+          <Icon name="chevronDown" size={11} className="pill-caret" />
         </button>
       )}
     >

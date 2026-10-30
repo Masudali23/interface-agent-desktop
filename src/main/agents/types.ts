@@ -38,6 +38,8 @@ export type AgentEvent =
   | { t: 'turn-ref'; start?: string; end?: string }
   | { t: 'diff'; diff: string }
   | { t: 'context'; context: ContextUsage }
+  /** Output tokens generated so far in the running turn (cumulative). */
+  | { t: 'progress'; outputTokens: number }
   | { t: 'account'; info: Partial<AccountInfo> }
   | {
       t: 'turn-end'

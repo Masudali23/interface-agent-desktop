@@ -1,17 +1,16 @@
 import { useState } from 'react'
 import type { Room } from '@shared/types'
-import { act, useApp } from '../store'
-import { Icon } from './Icon'
-import { Popover } from './MemberControls'
+import { act } from '../store'
 
-export function ShareChat({ room }: { room: Room }) {
-  const platform = useApp((s) => s.platform)
+export type ExportAction = 'copy' | 'markdown' | 'zip' | 'share'
+
+/** Exports the complete chat (copy, save or the macOS share menu) and reports the result
+ *  in a toast. `working` stays true until the export has finished. */
+export function useChatExport(room: Room): { working: boolean; run: (action: ExportAction) => Promise<void> } {
   const [working, setWorking] = useState(false)
-
-  const run = async (action: 'copy' | 'markdown' | 'zip' | 'share', close: () => void): Promise<void> => {
+  const run = async (action: ExportAction): Promise<void> => {
     if (working) return
     setWorking(true)
-    close()
     try {
       await act(() => window.iface.exportChat(room.id, action), (result) => {
         if (result.action === 'canceled') return undefined
@@ -26,41 +25,23 @@ export function ShareChat({ room }: { room: Room }) {
       setWorking(false)
     }
   }
+  return { working, run }
+}
 
+/** Menu rows for sharing or exporting the chat. */
+export function ChatExportItems({ platform, working, run, close }: { platform: string; working: boolean; run: (action: ExportAction) => Promise<void>; close: () => void }) {
+  const item = (action: ExportAction, label: string, desc: string) => (
+    <button className="menu-item" disabled={working} onClick={() => { close(); void run(action) }}>
+      <span className="mi-label">{label}</span>
+      <span className="mi-desc">{desc}</span>
+    </button>
+  )
   return (
-    <Popover
-      align="right"
-      button={(open, toggle) => (
-        <button className={`chat-share-btn ${open ? 'on' : ''}`} onClick={toggle} disabled={working} aria-label="Share chat" title="Share or export the complete chat">
-          <Icon name="share" size={15} />
-          <span>{working ? 'Exporting…' : 'Share'}</span>
-        </button>
-      )}
-    >
-      {(close) => (
-        <div className="chat-share-menu">
-          <div className="menu-title">Share this chat</div>
-          <p className="chat-share-note">Includes messages, recorded thinking, tool activity and file changes.</p>
-          <button className="menu-item" onClick={() => void run('copy', close)}>
-            <span className="mi-label">Copy Markdown</span>
-            <span className="mi-desc">Full text; use ZIP to include attachment files</span>
-          </button>
-          <button className="menu-item" onClick={() => void run('markdown', close)}>
-            <span className="mi-label">Save Markdown…</span>
-            <span className="mi-desc">A .md file with attachments beside it</span>
-          </button>
-          <button className="menu-item" onClick={() => void run('zip', close)}>
-            <span className="mi-label">Save complete chat ZIP…</span>
-            <span className="mi-desc">Markdown, screenshots and files in one package</span>
-          </button>
-          {platform === 'darwin' && (
-            <button className="menu-item" onClick={() => void run('share', close)}>
-              <span className="mi-label">Share via macOS…</span>
-              <span className="mi-desc">Choose AirDrop, Mail or another available app</span>
-            </button>
-          )}
-        </div>
-      )}
-    </Popover>
+    <>
+      {item('copy', 'Copy as Markdown', 'Full text, recorded thinking, tools and file changes')}
+      {item('markdown', 'Save Markdown…', 'A .md file with attachments beside it')}
+      {item('zip', 'Save complete chat ZIP…', 'Markdown, screenshots and files in one package')}
+      {platform === 'darwin' && item('share', 'Share via macOS…', 'AirDrop, Mail or another available app')}
+    </>
   )
 }

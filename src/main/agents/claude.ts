@@ -94,6 +94,13 @@ export class ClaudeAgent extends EventEmitter implements AgentConnector {
   /** Usage of earlier results when one turn spans several (a late steer starts another). */
   private carried?: MessageUsage
   private carryTimer?: NodeJS.Timeout
+  /** Output tokens of the turn's finished API messages since the turn (or its carried part) began. */
+  private streamedOutput = 0
+  /** Output tokens of the API message streaming now. */
+  private messageOutput = 0
+  /** Claude Code's estimate of the current message's thinking, until its usage arrives. */
+  private thinkingEstimate = 0
+  private reportedOutput = 0
 
   constructor(private opts: ClaudeOptions) {
     super()
@@ -212,6 +219,10 @@ export class ClaudeAgent extends EventEmitter implements AgentConnector {
     this.turnStartSeen = false
     this.unreadSteers = 0
     this.carried = undefined
+    this.streamedOutput = 0
+    this.messageOutput = 0
+    this.thinkingEstimate = 0
+    this.reportedOutput = 0
     this.blockKeys.clear()
     proc.write({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null })
     this.emitEvent({ t: 'status', status: 'thinking' })
@@ -427,7 +438,25 @@ export class ClaudeAgent extends EventEmitter implements AgentConnector {
       case 'api_retry':
         this.emitEvent({ t: 'status', status: 'thinking', detail: 'retrying' })
         return
+      case 'thinking_tokens': {
+        // Thinking streams no usage until its message ends; this keeps the live count moving.
+        const estimate = Number(ev.estimated_tokens)
+        if (ev.parent_tool_use_id || !Number.isFinite(estimate) || estimate <= this.thinkingEstimate) return
+        this.thinkingEstimate = estimate
+        this.reportOutput()
+        return
+      }
     }
+  }
+
+  /** Reports the turn's output tokens so far: carried results plus what has streamed since. */
+  private reportOutput(): void {
+    if (!this.turnActive) return
+    // Never step back: a message's real usage can come in below the thinking estimate shown.
+    const total = Math.max(this.reportedOutput, (this.carried?.outputTokens ?? 0) + this.streamedOutput + Math.max(this.messageOutput, this.thinkingEstimate))
+    if (total === this.reportedOutput) return
+    this.reportedOutput = total
+    this.emitEvent({ t: 'progress', outputTokens: total })
   }
 
   private onStream(e: Json): void {
@@ -437,7 +466,22 @@ export class ClaudeAgent extends EventEmitter implements AgentConnector {
         this.currentMessage = e.message?.id ?? randomUUID()
         this.streamedMessages.add(this.currentMessage)
         this.blockKeys.clear()
+        // Usage in stream events counts one API message; a turn makes one per step.
+        this.streamedOutput += Math.max(this.messageOutput, this.thinkingEstimate)
+        this.messageOutput = Number(e.message?.usage?.output_tokens) || 0
+        this.thinkingEstimate = 0
+        this.reportOutput()
         return
+      case 'message_delta': {
+        const output = Number(e.usage?.output_tokens)
+        if (Number.isFinite(output) && output > this.messageOutput) {
+          // The message's real usage includes its thinking: the estimate is done.
+          this.messageOutput = output
+          this.thinkingEstimate = 0
+          this.reportOutput()
+        }
+        return
+      }
       case 'content_block_start': {
         const block = e.content_block ?? {}
         const key = `${this.currentMessage}:${e.index}`
@@ -542,6 +586,13 @@ export class ClaudeAgent extends EventEmitter implements AgentConnector {
     // Claude Code: keep this reply open and continue it there.
     if (this.unreadSteers > 0 && !failed && !this.stopping) {
       this.carried = total
+      // The result's totals now cover what streamed so far.
+      if (total.outputTokens !== undefined) {
+        this.streamedOutput = 0
+        this.messageOutput = 0
+        this.thinkingEstimate = 0
+        this.reportOutput()
+      }
       // Should Claude Code never pick the message up, end the reply anyway.
       this.carryTimer = setTimeout(() => {
         this.unreadSteers = 0

@@ -66,7 +66,12 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
   private items = new Map<string, Json>()
   private textStarted = new Set<string>()
   private lastUsage?: { inputTokens: number; cachedTokens: number; outputTokens: number; steps: number }
+  /** The thread totals of the last token usage update, to tell a new model call from a repeat. */
+  private usageTotals?: string
   private startedAt = 0
+  /** The plan's latest version. Each change is a new block, so every version keeps its own time. */
+  private plan?: { id: string; input: string }
+  private planVersion = 0
   private handler: ThreadHandler
 
   constructor(private opts: CodexOptions) {
@@ -175,6 +180,7 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
     this.lastError = ''
     this.turnId = undefined
     this.lastUsage = undefined
+    this.plan = undefined
     this.textStarted.clear()
     this.startedAt = Date.now()
     this.emitEvent({ t: 'status', status: 'thinking' })
@@ -228,6 +234,8 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
     this.stopping = false
     this.lastError = ''
     this.turnId = undefined
+    this.lastUsage = undefined
+    this.plan = undefined
     this.textStarted.clear()
     this.startedAt = Date.now()
     this.emitEvent({ t: 'status', status: 'working', detail: name })
@@ -407,9 +415,13 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
         this.emitEvent({ t: 'tool-output', id: `codex-${p.itemId}`, text: p.delta ?? '' })
         return
       case 'turn/plan/updated': {
-        const id = `codex-plan-${p.turnId}`
         const items = (p.plan ?? []).map((s: Json) => ({ text: s.step, status: s.status === 'inProgress' ? 'in_progress' : s.status }))
-        this.emitEvent({ t: 'tool-input', id, name: 'Plan', input: { items, explanation: p.explanation } })
+        const input = { items, explanation: p.explanation }
+        const json = JSON.stringify(input)
+        if (this.plan?.input === json) return
+        if (this.plan) this.emitEvent({ t: 'tool-end', id: this.plan.id })
+        this.plan = { id: `codex-plan-${p.turnId}-${++this.planVersion}`, input: json }
+        this.emitEvent({ t: 'tool-start', id: this.plan.id, name: 'Plan', input })
         return
       }
       case 'turn/diff/updated':
@@ -418,8 +430,13 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
       case 'thread/tokenUsage/updated': {
         const u = p.tokenUsage ?? {}
         const last = u.last ?? {}
+        // Codex repeats the latest update, unchanged, whenever it only refreshes rate limits.
+        // The thread totals move only when a model call finishes.
+        const totals = u.total ? `${p.threadId ?? ''}:${JSON.stringify(u.total)}` : undefined
+        const repeat = totals !== undefined && totals === this.usageTotals
+        if (totals !== undefined) this.usageTotals = totals
         // One update per model call: add them up for the turn, like Claude's totals.
-        if (this.turnActive && (!p.turnId || !this.turnId || p.turnId === this.turnId)) {
+        if (!repeat && this.turnActive && (!p.turnId || !this.turnId || p.turnId === this.turnId)) {
           const sum = this.lastUsage ?? { inputTokens: 0, cachedTokens: 0, outputTokens: 0, steps: 0 }
           this.lastUsage = {
             inputTokens: sum.inputTokens + (last.inputTokens ?? 0),
@@ -428,6 +445,7 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
             outputTokens: sum.outputTokens + (last.outputTokens ?? 0),
             steps: sum.steps + 1
           }
+          this.emitEvent({ t: 'progress', outputTokens: this.lastUsage.outputTokens })
         }
         if (u.modelContextWindow) {
           const used = last.totalTokens ?? (last.inputTokens ?? 0) + (last.outputTokens ?? 0)
@@ -437,7 +455,8 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
       }
       case 'turn/completed': {
         const turn = p.turn ?? {}
-        this.emitEvent({ t: 'tool-end', id: `codex-plan-${turn.id}` })
+        if (this.plan) this.emitEvent({ t: 'tool-end', id: this.plan.id })
+        this.plan = undefined
         const status = turn.status
         this.finish({
           t: 'turn-end',

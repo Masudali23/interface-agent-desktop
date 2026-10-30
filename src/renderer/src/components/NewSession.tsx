@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { PROVIDER_LABEL, type Account, type RoomKind } from '@shared/types'
+import { projectGroups } from '../lib/chrome'
 import { accountProblem, basename } from '../lib/format'
 import { useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
@@ -40,7 +41,9 @@ export function NewSessionDialog() {
   const request = useApp((s) => s.newSession)
   const close = useApp((s) => s.closeNewSession)
   const accounts = useApp((s) => s.settings?.accounts ?? EMPTY)
-  const recent = useApp((s) => s.settings?.recentFolders ?? EMPTY)
+  const projects = useApp((s) => s.settings?.projects ?? EMPTY)
+  const rooms = useApp((s) => s.rooms)
+  const recent = useMemo(() => projectGroups(rooms, projects).map((g) => g.folder), [rooms, projects])
   const openRoom = useApp((s) => s.openRoom)
   const openSettings = useApp((s) => s.openSettings)
   const [kind, setKind] = useState<RoomKind>('team')
@@ -68,6 +71,15 @@ export function NewSessionDialog() {
       setPicked(accounts.filter((a) => a.provider === kind).slice(0, 1).map((a) => a.id))
     }
   }, [kind, accounts.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!request) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !creating) close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [request, creating, close])
 
   if (!request) return null
   const list = kind === 'team' ? accounts : accounts.filter((a) => a.provider === kind)
@@ -131,13 +143,13 @@ export function NewSessionDialog() {
             ))}
           </div>
 
-          <h3>Folder</h3>
+          <h3>Project</h3>
           <div className="folder-pick">
             <div className="folder-current" title={folder}>
               <Icon name="folder" size={14} /> {folder ?? 'No folder chosen yet'}
             </div>
             <button className="btn" onClick={() => void browse()}>
-              Choose…
+              Other folder…
             </button>
           </div>
           {recent.length > 0 && (

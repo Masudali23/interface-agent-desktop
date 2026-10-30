@@ -112,6 +112,12 @@ export function toolSummary(name: string, input: unknown, root: string): string 
       return (Array.isArray(i.changes) ? i.changes : []).map((c: Input) => path(c.path)).join(', ')
     case 'Plan':
       return `${Array.isArray(i.items) ? i.items.length : 0} steps`
+    case 'TaskCreate':
+      return str(i.subject ?? i.description)
+    case 'TaskUpdate':
+      return [i.taskId != null ? `#${str(i.taskId)}` : '', typeof i.status === 'string' ? i.status.replace(/_/g, ' ') : '', str(i.subject)].filter(Boolean).join(' · ')
+    case 'ToolSearch':
+      return str(i.query).replace(/^select:/, '').split(',').join(', ')
     case 'Skill':
       return str(i.skill ?? i.command)
     default: {
@@ -144,7 +150,13 @@ export const TOOL_VERB: Record<string, string> = {
   'Generate image': 'Generated image',
   Review: 'Review',
   ExitPlanMode: 'Plan ready',
-  AskUserQuestion: 'Asked'
+  AskUserQuestion: 'Asked',
+  TaskCreate: 'Added a task',
+  TaskUpdate: 'Updated a task',
+  TaskList: 'Listed tasks',
+  TaskGet: 'Read a task',
+  TaskStop: 'Stopped a task',
+  ToolSearch: 'Loaded tools'
 }
 
 /** Time left until a limit resets, like "3 hr 5 min" or "2 days 4 hr". */
@@ -209,4 +221,150 @@ export function accountProblem(info: AccountInfo | undefined): string | undefine
   const full = info?.limits.find((l) => l.percent >= 100)
   if (full) return `${full.label} limit reached${full.resetsAt ? `, resets in ${untilText(full.resetsAt)}` : ''}`
   return undefined
+}
+
+const COMMAND_TOOLS = ['Bash', 'Shell']
+const READ_TOOLS = ['Read', 'View image']
+const EDIT_TOOLS = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Edit files']
+const SEARCH_TOOLS = ['Glob', 'Grep']
+const WEB_SEARCH_TOOLS = ['WebSearch', 'Web search']
+const AGENT_TOOLS = ['Task', 'Agent']
+const PLAN_TOOLS = ['TodoWrite', 'Plan', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']
+
+/** A readable name for a tool, without the MCP server prefix. */
+export function toolLabel(name: string): string {
+  const mcp = /^mcp__.+?__(.+)$/.exec(name)
+  if (mcp) return mcp[1].replace(/_/g, ' ')
+  const codexMcp = /^[^:]+:\s*(.+)$/.exec(name)
+  return codexMcp ? codexMcp[1] : name
+}
+
+function count(n: number, one: string, many: string): string {
+  return n === 1 ? one : many.replace('#', String(n))
+}
+
+function editedFileKeys(name: string, input: unknown, fallback: string): string[] {
+  const i = (input ?? {}) as Input
+  if (name === 'Edit files') {
+    const paths = (Array.isArray(i.changes) ? (i.changes as Input[]) : []).map((c) => str(c?.path)).filter(Boolean)
+    return paths.length ? paths : [fallback]
+  }
+  return [str(i.file_path ?? i.notebook_path) || fallback]
+}
+
+/** Past-tense summary of a run of steps, like Claude desktop: "Ran 2 commands, read a file". */
+export function activitySummary(blocks: Block[]): { text: string; failed: number } {
+  const order: string[] = []
+  const tally = new Map<string, { n: number; keys: Set<string>; name?: string }>()
+  const add = (group: string, key: string, name?: string): void => {
+    let entry = tally.get(group)
+    if (!entry) {
+      entry = { n: 0, keys: new Set(), name }
+      tally.set(group, entry)
+      order.push(group)
+    }
+    entry.n++
+    entry.keys.add(key)
+  }
+  let failed = 0
+  let thought = false
+  for (const b of blocks) {
+    if (b.kind === 'thinking') thought = true
+    if (b.kind !== 'tool') continue
+    if (b.status === 'error' || b.isError) failed++
+    const i = (b.input ?? {}) as Input
+    if (COMMAND_TOOLS.includes(b.name)) add('command', b.id)
+    else if (READ_TOOLS.includes(b.name)) add('read', str(i.file_path ?? i.path) || b.id)
+    else if (EDIT_TOOLS.includes(b.name)) for (const key of editedFileKeys(b.name, b.input, b.id)) add('edit', key)
+    else if (SEARCH_TOOLS.includes(b.name)) add('search', b.id)
+    else if (b.name === 'WebFetch') add('fetch', str(i.url) || b.id)
+    else if (WEB_SEARCH_TOOLS.includes(b.name)) add('web', b.id)
+    else if (AGENT_TOOLS.includes(b.name)) add('agent', b.id)
+    else if (PLAN_TOOLS.includes(b.name)) add('plan', b.id)
+    else if (b.name === 'ToolSearch') add('tools', b.id)
+    else if (b.name === 'TaskStop') add('stop', b.id)
+    else if (b.name === 'Compact') add('compact', b.id)
+    else if (b.name === 'Skill') add('skill', b.id)
+    else if (b.name === 'AskUserQuestion') add('ask', b.id)
+    else if (b.name === 'ExitPlanMode') add('present', b.id)
+    else if (b.name === 'Generate image') add('image', b.id)
+    else if (b.name === 'Review') add('review', b.id)
+    else add('other', b.id, toolLabel(b.name))
+  }
+  const phrase = (group: string): string => {
+    const { n, keys, name } = tally.get(group)!
+    const files = keys.size
+    switch (group) {
+      case 'command': return count(n, 'ran a command', 'ran # commands')
+      case 'read': return count(files, 'read a file', 'read # files')
+      case 'edit': return count(files, 'edited a file', 'edited # files')
+      case 'search': return count(n, 'searched files', 'ran # searches')
+      case 'fetch': return count(files, 'fetched a page', 'fetched # pages')
+      case 'web': return count(n, 'searched the web', 'searched the web # times')
+      case 'agent': return count(n, 'ran an agent', 'ran # agents')
+      case 'plan': return 'updated the plan'
+      case 'tools': return 'loaded tools'
+      case 'stop': return count(n, 'stopped a background task', 'stopped # background tasks')
+      case 'compact': return 'compacted the conversation'
+      case 'skill': return count(n, 'used a skill', 'used # skills')
+      case 'ask': return count(n, 'asked a question', 'asked # questions')
+      case 'present': return 'presented a plan'
+      case 'image': return count(n, 'generated an image', 'generated # images')
+      case 'review': return 'reviewed changes'
+      default: return count(n, `used ${name}`, 'used # tools')
+    }
+  }
+  const text = order.length ? order.map(phrase).join(', ') : thought ? 'thought' : ''
+  return { text: text.charAt(0).toUpperCase() + text.slice(1), failed }
+}
+
+/** What a running tool is doing right now: "Running a command". */
+export function toolProgress(name: string): string {
+  if (COMMAND_TOOLS.includes(name)) return 'Running a command'
+  if (READ_TOOLS.includes(name)) return 'Reading a file'
+  if (EDIT_TOOLS.includes(name)) return 'Editing a file'
+  if (SEARCH_TOOLS.includes(name)) return 'Searching'
+  if (name === 'WebFetch') return 'Fetching a page'
+  if (WEB_SEARCH_TOOLS.includes(name)) return 'Searching the web'
+  if (AGENT_TOOLS.includes(name)) return 'Running an agent'
+  if (PLAN_TOOLS.includes(name)) return 'Updating the plan'
+  if (name === 'ToolSearch') return 'Loading tools'
+  if (name === 'Compact' || name === 'compact' || name === 'compacting') return 'Compacting the conversation'
+  if (name === 'review' || name === 'Review') return 'Reviewing changes'
+  return `Using ${toolLabel(name)}`
+}
+
+/** The live activity of an agent, from its runtime status. */
+export function runtimeActivity(runtime?: { status: AgentStatus; detail?: string }): string {
+  switch (runtime?.status) {
+    case 'starting':
+      return 'Starting'
+    case 'thinking':
+      return runtime.detail === 'retrying' ? 'Retrying' : 'Thinking'
+    case 'working':
+      return runtime.detail ? toolProgress(runtime.detail) : 'Working'
+    case 'waiting':
+      return 'Waiting for you'
+    default:
+      return ''
+  }
+}
+
+/** A running duration: "38s", "1m 4s", "1h 2m". */
+export function elapsedText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+/** Rough output size of a turn so far (about four characters per token). */
+export function estimateTokens(message: Message): number {
+  let chars = 0
+  for (const b of message.blocks) {
+    if (b.kind === 'text' || b.kind === 'thinking') chars += b.text.length
+    else if (b.kind === 'tool') chars += b.input == null ? 0 : JSON.stringify(b.input).length
+  }
+  return Math.round(chars / 4)
 }

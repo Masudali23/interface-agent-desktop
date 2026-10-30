@@ -1,5 +1,7 @@
 import type { Account, AccountInfo } from '@shared/types'
 import { useEffect, useState } from 'react'
+import { topLimit } from '../lib/chrome'
+import { useStoredList } from '../lib/frame'
 import { resetAt, resetText, untilText } from '../lib/format'
 import { useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
@@ -54,34 +56,62 @@ function AccountRow({ account }: { account: Account }) {
   const info = useApp((s) => s.accountInfo[account.id])
   const openSettings = useApp((s) => s.openSettings)
   return (
-    <button className="account-row" onClick={() => openSettings('accounts')} title={info?.email ?? account.name}>
-      <div className="account-row-head">
+    <button className="sb-account" onClick={() => openSettings('accounts')} title={info?.email ?? account.name}>
+      <div className="sb-account-head">
         <AgentMark provider={account.provider} color={account.color} size={16} />
-        <span className="account-name">{account.name}</span>
-        {info?.plan && <span className="plan">{info.plan}</span>}
+        <span className="sb-account-name">{account.name}</span>
+        {info?.plan && <span className="sb-account-plan">{info.plan}</span>}
       </div>
       <UsageBars info={info} compact />
     </button>
   )
 }
 
+/** One mark per account with the share of its tightest limit, shown while the list is folded. */
+function AccountsSummary({ accounts }: { accounts: Account[] }) {
+  const info = useApp((s) => s.accountInfo)
+  return (
+    <span className="sb-accounts-summary">
+      {accounts.map((a) => {
+        const top = topLimit(info[a.id])
+        return (
+          <span key={a.id} className="sb-accounts-chip" title={top ? `${a.name}: ${top.label} ${Math.round(top.percent)}% used` : a.name}>
+            <AgentMark provider={a.provider} color={a.color} size={12} />
+            {top ? `${Math.round(top.percent)}%` : null}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
 export function AccountsUsage() {
   const accounts = useApp((s) => s.settings?.accounts ?? EMPTY)
+  const [folded, toggle] = useStoredList('iface.accountsFolded')
+  const collapsed = folded.includes('accounts')
+  if (!accounts.length) return null
   return (
-    <div className="accounts-usage">
-      <div className="usage-title">
-        <span>Accounts and limits</span>
-        <button
-          className="icon-btn tiny"
-          title="Refresh usage"
-          onClick={() => accounts.forEach((a) => void window.iface.refreshAccount(a.id))}
-        >
-          <Icon name="refresh" size={12} />
+    <section className={`sb-accounts ${collapsed ? 'collapsed' : ''}`}>
+      <div className="sb-accounts-head">
+        <button className="sb-group-toggle" aria-expanded={!collapsed} onClick={() => toggle('accounts')}>
+          <span className="sb-group-name">Accounts and limits</span>
+          <Icon name="caretDown" size={10} className="sb-caret" />
         </button>
+        {collapsed ? (
+          <AccountsSummary accounts={accounts} />
+        ) : (
+          <button className="icon-btn tiny" title="Refresh usage" onClick={() => accounts.forEach((a) => void window.iface.refreshAccount(a.id))}>
+            <Icon name="refresh" size={12} />
+          </button>
+        )}
       </div>
-      {accounts.map((a) => (
-        <AccountRow key={a.id} account={a} />
-      ))}
-    </div>
+      {!collapsed && (
+        <div className="sb-accounts-list">
+          {accounts.map((a) => (
+            <AccountRow key={a.id} account={a} />
+          ))}
+        </div>
+      )}
+    </section>
   )
 }

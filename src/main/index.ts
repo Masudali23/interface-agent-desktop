@@ -450,12 +450,12 @@ async function runE2E(configPath: string): Promise<void> {
     if (image) writeFileSync(path, image.toPNG())
   }
   // A real mouse click through Chromium's input pipeline (hit-testing included) at the
-  // centre of the first visible control whose text or title starts with `label`,
-  // searching the open dialog first.
+  // centre of the first visible control whose text or title starts with `label`, searching
+  // the topmost dialog, search palette or open menu first.
   const clickLabel = async (label: string): Promise<void> => {
     const box = await win?.webContents.executeJavaScript(`(() => {
-      const modals = document.querySelectorAll('.modal')
-      const scope = modals.length ? modals[modals.length - 1] : document
+      const overlays = document.querySelectorAll('.modal, [role=dialog], .popover.menu')
+      const scope = overlays.length ? overlays[overlays.length - 1] : document
       const candidates = [...scope.querySelectorAll('button, [role=button], .chip, .kind-card, label')].filter((e) => e.getBoundingClientRect().width > 0)
       const wanted = ${JSON.stringify(label)}
       const el = candidates.find((e) => e.title === wanted || e.getAttribute('aria-label') === wanted)
@@ -520,8 +520,25 @@ async function runE2E(configPath: string): Promise<void> {
     app.quit()
     return
   }
-  const ids = cfg.accounts ?? (cfg.kind === 'codex' ? [accounts.firstOf('codex')!.id] : cfg.kind === 'claude' ? [accounts.firstOf('claude')!.id] : [accounts.firstOf('claude')!.id, accounts.firstOf('codex')!.id])
-  const room = await rooms.create({ folder: cfg.folder, kind: cfg.kind, accountIds: ids, isolation: !!cfg.isolation })
+  const created = await (async () => {
+    try {
+      // The run may use a fresh folder; the app itself refuses a folder that disappeared.
+      mkdirSync(cfg.folder, { recursive: true })
+      const ids = cfg.accounts ?? (cfg.kind === 'codex' ? [accounts.firstOf('codex')!.id] : cfg.kind === 'claude' ? [accounts.firstOf('claude')!.id] : [accounts.firstOf('claude')!.id, accounts.firstOf('codex')!.id])
+      return await rooms.create({ folder: cfg.folder, kind: cfg.kind, accountIds: ids, isolation: !!cfg.isolation })
+    } catch (err) {
+      log.push(`setup failed: ${err instanceof Error ? err.message : String(err)}`)
+      return undefined
+    }
+  })()
+  if (!created) {
+    // Report and quit instead of leaving the run waiting forever.
+    writeFileSync(`${cfg.screenshot}.json`, JSON.stringify({ log, rooms: store.list() }, null, 1))
+    quitConfirmed = true
+    app.quit()
+    return
+  }
+  const room = created
   if (cfg.memberSettings) for (const m of room.members) rooms.updateMember(room.id, m.id, cfg.memberSettings)
   emit({ type: 'open-room', roomId: room.id })
   await new Promise((r) => setTimeout(r, 1500))

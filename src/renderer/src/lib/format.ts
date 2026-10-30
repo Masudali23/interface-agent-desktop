@@ -215,10 +215,15 @@ export function languageOf(path: string): string | undefined {
   return map[ext]
 }
 
-/** Why an account can't work right now, if it can't: not signed in, or a limit used up. */
-export function accountProblem(info: AccountInfo | undefined): string | undefined {
+/** Limits that stop the whole account: Claude's 5-hour and all-models weekly windows and
+ *  Codex's own windows. A per-model, per-app or extra-usage limit leaves other work possible. */
+const ACCOUNT_LIMITS = new Set(['session', 'weekly_all', 'five_hour', 'seven_day', 'codex:primary', 'codex:secondary'])
+
+/** Why an account can't work right now, if it can't: not signed in, or a limit used up
+ *  that has not reset yet (usage refreshes only every few minutes). */
+export function accountProblem(info: AccountInfo | undefined, now = Date.now()): string | undefined {
   if (info?.loggedIn === false) return 'Not signed in. Sign in from Settings → Accounts first'
-  const full = info?.limits.find((l) => l.percent >= 100)
+  const full = info?.limits.find((l) => ACCOUNT_LIMITS.has(l.id) && l.percent >= 100 && !(l.resetsAt && l.resetsAt <= now))
   if (full) return `${full.label} limit reached${full.resetsAt ? `, resets in ${untilText(full.resetsAt)}` : ''}`
   return undefined
 }

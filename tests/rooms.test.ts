@@ -6,6 +6,8 @@ import type { Store } from '../src/main/store'
 import type { AccountManager } from '../src/main/accounts'
 import type { AgentEvent, TurnInput } from '../src/main/agents/types'
 import { appendFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { diffTrees, restoreTree, snapshot } from '../src/main/git'
 
 interface MockConnector extends EventEmitter {
@@ -92,7 +94,7 @@ function setup(patch: Partial<Room> = {}) {
   const store = {
     get: vi.fn((id: string) => rooms.get(id)), all: vi.fn(() => [...rooms.values()]),
     summary: vi.fn((value: Room) => value), put: vi.fn((value: Room) => rooms.set(value.id, value)),
-    saveSoon: vi.fn(), saveNow: vi.fn(), addRecentFolder: vi.fn(), delete: vi.fn((id: string) => rooms.delete(id)),
+    saveSoon: vi.fn(), saveNow: vi.fn(), addRecentFolder: vi.fn(), addProject: vi.fn(), delete: vi.fn((id: string) => rooms.delete(id)),
     takeReleased: vi.fn((): Array<{ room: Room; message: Message }> => []), settings: { defaults: DEFAULT_ROOM_DEFAULTS }
   }
   const catalog = [
@@ -1500,5 +1502,23 @@ describe('RoomManager queue for later', () => {
     expect(appendFileSync).toHaveBeenCalledOnce()
     expect(vi.mocked(appendFileSync).mock.calls[0][0]).toBe('/project/.collab/room-1/chat.md')
     expect(String(vi.mocked(appendFileSync).mock.calls[0][1])).toContain('Released later task')
+  })
+})
+
+describe('new sessions', () => {
+  it('adds the folder of a new session as a project', async () => {
+    const { manager, store } = setup()
+    const folder = tmpdir()
+    const created = await manager.create({ folder: `${folder}/`, kind: 'claude', accountIds: ['acc-a'], isolation: false })
+    expect(created).toMatchObject({ folder, kind: 'claude' })
+    expect(store.addProject).toHaveBeenCalledWith(folder)
+  })
+
+  it('refuses a project folder that was moved or deleted instead of recreating it', async () => {
+    const { manager, store } = setup()
+    const gone = join(tmpdir(), `interface-gone-${Date.now()}`)
+    await expect(manager.create({ folder: gone, kind: 'claude', accountIds: ['acc-a'], isolation: false })).rejects.toThrow('is missing')
+    expect(store.put).not.toHaveBeenCalled()
+    expect(store.addProject).not.toHaveBeenCalled()
   })
 })

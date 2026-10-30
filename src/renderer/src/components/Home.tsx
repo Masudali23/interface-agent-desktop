@@ -1,5 +1,6 @@
+import { useMemo } from 'react'
 import type { AgentInstall, RoomKind } from '@shared/types'
-import { shortcut } from '../lib/chrome'
+import { projectGroups, shortcut } from '../lib/chrome'
 import { ago, basename } from '../lib/format'
 import { useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
@@ -27,10 +28,12 @@ export function Home() {
   const mode = useApp((s) => s.mode)
   const platform = useApp((s) => s.platform)
   const agents = useApp((s) => s.agents)
-  const recent = useApp((s) => s.settings?.recentFolders ?? EMPTY)
+  const projects = useApp((s) => s.settings?.projects ?? EMPTY)
   const rooms = useApp((s) => s.rooms)
   const openNewSession = useApp((s) => s.openNewSession)
+  const addProject = useApp((s) => s.addProject)
   const copy = COPY[mode]
+  const recent = useMemo(() => projectGroups(rooms, projects).map((g) => g.folder), [rooms, projects])
   const last = (folder: string): number | undefined => rooms.find((r) => r.folder === folder)?.updatedAt
   return (
     <div className="home drag">
@@ -45,13 +48,13 @@ export function Home() {
           <span className="home-start-icon"><Icon name="plus" size={18} /></span>
           <span className="home-start-text">
             <span className="home-start-label">New session</span>
-            <span className="home-start-sub">{recent[0] ? `In ${basename(recent[0])} or another folder` : 'Choose a folder to work in'}</span>
+            <span className="home-start-sub">{recent[0] ? `In ${basename(recent[0])} or another project` : 'Choose a folder to work in'}</span>
           </span>
           <kbd>{shortcut(platform, 'N')}</kbd>
         </button>
         {recent.length > 0 && (
           <div className="home-recent">
-            <div className="home-section">Recent folders</div>
+            <div className="home-section">Projects</div>
             {recent.slice(0, 6).map((f) => {
               const when = last(f)
               return (
@@ -64,6 +67,10 @@ export function Home() {
                 </button>
               )
             })}
+            <button className="home-recent-row" onClick={() => void addProject()} title="Add a folder as a project">
+              <Icon name="folderPlus" size={15} />
+              <span className="home-recent-name">Add project…</span>
+            </button>
           </div>
         )}
         <div className="home-installs">

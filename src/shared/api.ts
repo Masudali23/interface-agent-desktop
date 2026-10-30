@@ -29,6 +29,10 @@ export interface IfaceApi {
   getState(): Promise<InitialState>
   checkAgents(): Promise<AgentsInfo>
   pickFolder(): Promise<string | null>
+  /** Adds a folder as a project, or moves an existing one to the top. */
+  addProject(folder: string): Promise<AppSettings>
+  /** Takes a project without sessions off the list; its folder is untouched. */
+  removeProject(folder: string): Promise<AppSettings>
 
   // rooms
   createRoom(input: NewRoomInput): Promise<Room>
@@ -108,6 +112,8 @@ export const API_METHODS: Array<keyof IfaceApi> = [
   'getState',
   'checkAgents',
   'pickFolder',
+  'addProject',
+  'removeProject',
   'createRoom',
   'getRoom',
   'renameRoom',

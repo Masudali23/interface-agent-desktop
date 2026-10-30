@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AccountInfo, RoomKind, RoomSummary } from '@shared/types'
-import { groupSessions, isSearchShortcut, matchSessions, paletteKey, parentPath, parseList, searchBlocked, shortcut, toggleItem, topLimit, visibleSessions } from '../src/renderer/src/lib/chrome'
+import { isSearchShortcut, matchSessions, paletteKey, parentPath, parseList, projectGroups, searchBlocked, shortcut, toggleItem, topLimit, visibleSessions } from '../src/renderer/src/lib/chrome'
 
 const room = (id: string, folder: string, kind: RoomKind = 'claude', extra: Partial<RoomSummary> = {}): RoomSummary => ({
   id,
@@ -21,30 +21,45 @@ const key = (k: string, mods: Partial<{ metaKey: boolean; ctrlKey: boolean; shif
   ...mods
 })
 
-describe('sidebar groups', () => {
-  it('keeps one mode, puts pinned sessions first and groups the rest by folder in recency order', () => {
+describe('sidebar projects', () => {
+  it('lists every session under its project, pinned first, newest project first', () => {
     const rooms = [
-      room('a', '/work/api'),
-      room('b', '/work/web', 'team'),
-      room('c', '/work/web'),
-      room('d', '/work/api', 'claude', { pinned: true }),
-      room('e', '/work/api')
+      room('a', '/work/api', 'claude', { updatedAt: 50 }),
+      room('b', '/work/web', 'team', { updatedAt: 40 }),
+      room('c', '/work/web', 'claude', { updatedAt: 30 }),
+      room('d', '/work/api', 'claude', { updatedAt: 20, pinned: true }),
+      room('e', '/work/api/', 'claude', { updatedAt: 10 })
     ]
-    const groups = groupSessions(rooms, 'claude')
-    expect(groups.pinned.map((r) => r.id)).toEqual(['d'])
-    expect(groups.folders).toEqual([
-      { folder: '/work/api', rooms: [rooms[0], rooms[4]] },
-      { folder: '/work/web', rooms: [rooms[2]] }
-    ])
-    expect(groupSessions(rooms, 'codex')).toEqual({ pinned: [], folders: [] })
+    const groups = projectGroups(rooms, [], 'claude')
+    expect(groups.map((g) => g.folder)).toEqual(['/work/api', '/work/web'])
+    // A trailing separator is the same project; the pinned session leads.
+    expect(groups[0].rooms.map((r) => r.id)).toEqual(['d', 'a', 'e'])
+    expect(groups[1]).toEqual({ folder: '/work/web', rooms: [rooms[2]], total: 2 })
   })
 
-  it('shows only the open session of a collapsed group', () => {
-    const list = [room('a', '/p'), room('b', '/p')]
+  it('shows added projects under every session type, even without sessions there', () => {
+    const rooms = [room('a', '/work/api', 'team', { updatedAt: 100 })]
+    const projects = [{ folder: '/work/new', addedAt: 300 }, { folder: '/work/old', addedAt: 5 }]
+    for (const mode of ['claude', 'codex', 'team'] as RoomKind[]) {
+      const groups = projectGroups(rooms, projects, mode)
+      expect(groups.map((g) => g.folder)).toEqual(['/work/new', ...(mode === 'team' ? ['/work/api', '/work/old'] : ['/work/old', '/work/api'])])
+      expect(groups.find((g) => g.folder === '/work/api')).toMatchObject({ total: 1, rooms: mode === 'team' ? [rooms[0]] : [] })
+    }
+    // Without a type, every session counts towards a project's place.
+    expect(projectGroups(rooms, projects).map((g) => g.folder)).toEqual(['/work/new', '/work/api', '/work/old'])
+  })
+
+  it('moves a project up when one of its sessions is newer than the latest added project', () => {
+    const projects = [{ folder: '/work/new', addedAt: 300 }]
+    expect(projectGroups([room('a', '/work/api', 'claude', { updatedAt: 400 })], projects, 'claude').map((g) => g.folder)).toEqual(['/work/api', '/work/new'])
+  })
+
+  it('keeps pinned sessions and the open one visible in a collapsed project', () => {
+    const list = [room('a', '/p'), room('b', '/p'), room('c', '/p', 'claude', { pinned: true })]
     expect(visibleSessions(list, false, 'b')).toEqual(list)
-    expect(visibleSessions(list, true, 'b')).toEqual([list[1]])
-    expect(visibleSessions(list, true, 'elsewhere')).toEqual([])
-    expect(visibleSessions(list, true)).toEqual([])
+    expect(visibleSessions(list, true, 'b')).toEqual([list[1], list[2]])
+    expect(visibleSessions(list, true, 'elsewhere')).toEqual([list[2]])
+    expect(visibleSessions(list.slice(0, 2), true)).toEqual([])
   })
 })
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PROVIDER_LABEL, activeMemberIds, defaultRecipients, type Member, type Room } from '@shared/types'
 import { stopAgents } from '../lib/actions'
-import { deleteSession, setPinned } from '../lib/frame'
+import { deleteSession, setPinned, showFolder, showFolderLabel } from '../lib/frame'
 import { basename, isBusy, STATUS_TEXT } from '../lib/format'
 import { act, useApp, type Panel, EMPTY } from '../store'
 import { AgentMark, Icon, type IconName } from './Icon'
@@ -71,7 +71,7 @@ function SessionTitle({ room }: { room: Room }) {
     <Popover
       className="ch-title-anchor no-drag"
       button={(open, toggle) => (
-        <button className={`ch-title ${open ? 'on' : ''}`} onClick={toggle} onDoubleClick={() => setEditing(true)} title={`${room.title}\nDouble-click to rename`} aria-haspopup="menu">
+        <button className={`ch-title ${open ? 'on' : ''}`} onClick={toggle} onDoubleClick={() => setEditing(true)} title={`${room.title}\nDouble-click to rename`} aria-haspopup="menu" aria-expanded={open}>
           <span className="ch-title-text">{room.title}</span>
           {exporter.working ? <span className="spinner small" title="Exporting…" /> : <Icon name="chevronDown" size={14} />}
         </button>
@@ -85,8 +85,8 @@ function SessionTitle({ room }: { room: Room }) {
           <button className="menu-item row" onClick={() => { close(); setPinned(room.id, !room.pinned) }}>
             <Icon name="pin" size={14} /><span className="mi-label">{room.pinned ? 'Unpin' : 'Pin'}</span>
           </button>
-          <button className="menu-item row" onClick={() => { close(); void window.iface.revealPath(room.folder) }}>
-            <Icon name="folderOpen" size={14} /><span className="mi-label">{platform === 'darwin' ? 'Reveal in Finder' : 'Open folder'}</span>
+          <button className="menu-item row" onClick={() => { close(); showFolder(platform, room.folder) }}>
+            <Icon name="folderOpen" size={14} /><span className="mi-label">{showFolderLabel(platform)}</span>
           </button>
           <div className="ch-menu-sep" />
           <div className="menu-title">Share this chat</div>
@@ -175,6 +175,7 @@ function MoreMenu({ room }: { room: Room }) {
 }
 
 export function RoomHeader({ room }: { room: Room }) {
+  const platform = useApp((s) => s.platform)
   const panel = useApp((s) => s.panel)
   const preview = useApp((s) => s.preview)
   const setPanel = useApp((s) => s.setPanel)
@@ -193,7 +194,7 @@ export function RoomHeader({ room }: { room: Room }) {
     <header className="room-head ch-head drag">
       <div className="ch-head-main">
         <SessionTitle room={room} />
-        <button className="ch-folder no-drag" title={`${room.folder}\nReveal folder`} onClick={() => void window.iface.revealPath(room.folder)}>
+        <button className="ch-folder no-drag" title={`${room.folder}\n${showFolderLabel(platform)}`} onClick={() => showFolder(platform, room.folder)}>
           {basename(room.folder)}
         </button>
         {room.isolation && <span className="tag ok ch-tag" title="Each agent works in its own git worktree">separate copies</span>}

@@ -11,13 +11,29 @@ export function Popover({ button, children, className = '', align = 'left', port
   const [place, setPlace] = useState<CSSProperties | undefined>()
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  /** The button edges a portaled menu was placed against, to notice when the button moves. */
+  const placedAt = useRef<{ right: boolean; up: boolean; x: number; y: number } | undefined>(undefined)
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent): void => {
       if (ref.current && !ref.current.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setOpen(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
+      const focused = document.activeElement
+      const inMenu = !!focused && !!menuRef.current?.contains(focused)
+      if (e.key === 'Escape') {
+        setOpen(false)
+        // Back to the button that opened it, so keyboard users keep their place.
+        if (inMenu) ref.current?.querySelector<HTMLElement>('button')?.focus()
+        return
+      }
+      // Up and down move between the items; other controls keep their own arrow keys.
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && inMenu && focused instanceof HTMLElement && focused.matches('.menu-item')) {
+        const items = [...menuRef.current!.querySelectorAll<HTMLElement>('.menu-item:not(:disabled)')]
+        const next = items.indexOf(focused) + (e.key === 'ArrowDown' ? 1 : -1)
+        items[(next + items.length) % items.length]?.focus()
+        e.preventDefault()
+      }
     }
     const onResize = (): void => setOpen(false)
     // A portaled menu is placed once, so it closes when its button scrolls away. Scrolls that
@@ -55,6 +71,8 @@ export function Popover({ button, children, className = '', align = 'left', port
     const prefersUp = menu.getBoundingClientRect().top < anchor.top
     const up = prefersUp ? height <= above || above >= below : !(height <= below || below >= above)
     if (portal) {
+      const right = align === 'right'
+      placedAt.current = { right, up, x: right ? anchor.right : anchor.left, y: up ? anchor.top : anchor.bottom }
       const width = Math.min(menu.getBoundingClientRect().width, window.innerWidth - margin * 2)
       setPlace({ position: 'fixed', left: Math.max(margin, Math.min(align === 'right' ? anchor.right - width : anchor.left, window.innerWidth - width - margin)), right: 'auto',
         top: up ? 'auto' : anchor.bottom + gap, bottom: up ? window.innerHeight - anchor.top + gap : 'auto',
@@ -69,6 +87,23 @@ export function Popover({ button, children, className = '', align = 'left', port
     else if (rect.left < margin) next.transform = `translateX(${Math.round(margin - rect.left)}px)`
     setPlace(next)
   }, [open, place, portal, align])
+  // A portaled menu sits at the end of the page, out of the Tab order, so its chosen (or
+  // first) item takes focus when it opens. It is placed once, so it closes if the edges of
+  // its button it was placed against move, e.g. when the sidebar reorders projects. A
+  // button whose label changes width (picking an effort) keeps the menu open.
+  useEffect(() => {
+    if (!open || !portal || !place) return
+    const items = menuRef.current
+    ;(items?.querySelector<HTMLElement>('.menu-item.on:not(:disabled)') ?? items?.querySelector<HTMLElement>('.menu-item:not(:disabled)'))?.focus({ preventScroll: true })
+    let frame = requestAnimationFrame(function follow() {
+      const now = ref.current?.getBoundingClientRect()
+      const at = placedAt.current
+      if (!now || !at) return
+      if (Math.abs((at.right ? now.right : now.left) - at.x) > 2 || Math.abs((at.up ? now.top : now.bottom) - at.y) > 2) return setOpen(false)
+      frame = requestAnimationFrame(follow)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [open, portal, place])
   const menu = open ? <div ref={menuRef} className={`popover menu align-${align}`} style={place ?? { visibility: 'hidden' }}>{children(() => setOpen(false))}</div> : null
   return (
     <div className={`pop-anchor ${className}`} ref={ref}>

@@ -1,8 +1,8 @@
 // Saves app settings and rooms as JSON files in the app's data folder
 // (~/.config/Interface on Ubuntu, ~/Library/Application Support/Interface on macOS).
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import {
   DEFAULT_ROOM_DEFAULTS,
   DEFAULT_SETTINGS,
@@ -10,6 +10,7 @@ import {
   type CodexMode,
   type MemberSettings,
   type Message,
+  type Project,
   type Room,
   type RoomSummary,
   type SearchHit
@@ -24,7 +25,8 @@ const BASE_SETTINGS: AppSettings = {
   defaults: DEFAULT_ROOM_DEFAULTS,
   theme: 'system',
   notifications: true,
-  recentFolders: []
+  recentFolders: [],
+  projects: []
 }
 
 function writeAtomic(file: string, data: unknown): void {
@@ -44,6 +46,36 @@ function readJson<T>(file: string): T | undefined {
 /** The last moment a room recorded anything: a message, its dispatch or one of its blocks. */
 function lastActivity(messages: Message[]): number {
   return messages.reduce((latest, m) => m.blocks.reduce((max, b) => Math.max(max, b.at ?? 0), Math.max(latest, m.createdAt, m.sentAt ?? 0)), 0)
+}
+
+/** The absolute path of a folder chosen for a project or a session. Fails if it is gone. */
+export function requireFolder(folder: string): string {
+  const dir = resolve(folder)
+  let found = false
+  try {
+    found = statSync(dir).isDirectory()
+  } catch {
+    // missing or unreadable: reported below
+  }
+  if (!found) throw new Error(`The folder ${dir} is missing. It may have been moved, renamed or deleted.`)
+  return dir
+}
+
+/** Saved projects in their saved order, without malformed or repeated entries. Settings from
+ *  before projects existed start with the folders recently used for sessions that still exist. */
+function readProjects(saved: Json): Project[] {
+  const list: unknown[] = Array.isArray(saved.projects)
+    ? saved.projects
+    : (Array.isArray(saved.recentFolders) ? saved.recentFolders : []).filter((f: unknown) => typeof f === 'string' && existsSync(f)).map((folder: string) => ({ folder, addedAt: 0 }))
+  const seen = new Set<string>()
+  const projects: Project[] = []
+  for (const item of list) {
+    const p = (item ?? {}) as Json
+    if (typeof p.folder !== 'string' || !p.folder || seen.has(resolve(p.folder))) continue
+    seen.add(resolve(p.folder))
+    projects.push({ folder: p.folder, addedAt: Number.isFinite(p.addedAt) ? p.addedAt : 0 })
+  }
+  return projects
 }
 
 const SANDBOX_TO_MODE: Record<string, CodexMode> = { 'read-only': 'read-only', 'workspace-write': 'auto', 'danger-full-access': 'full' }
@@ -103,6 +135,7 @@ export class Store {
       ...BASE_SETTINGS,
       ...saved,
       accounts: Array.isArray(saved.accounts) ? saved.accounts : [],
+      projects: readProjects(saved),
       defaults: {
         ...DEFAULT_ROOM_DEFAULTS,
         ...saved.defaults,
@@ -111,6 +144,20 @@ export class Store {
       }
     }
     this.loadRooms()
+    this.adoptSessionFolders(!Array.isArray(saved.projects))
+  }
+
+  /** Every session's folder is a project, so no project disappears with its last session.
+   *  Settings from before projects existed are saved once with the result. */
+  private adoptSessionFolders(seeded: boolean): void {
+    const known = new Set(this.settings.projects.map((p) => resolve(p.folder)))
+    const added: Project[] = []
+    for (const room of this.list()) {
+      if (known.has(resolve(room.folder))) continue
+      known.add(resolve(room.folder))
+      added.push({ folder: room.folder, addedAt: 0 })
+    }
+    if (seeded || added.length) this.saveSettings({ projects: [...this.settings.projects, ...added] })
   }
 
   private loadRooms(): void {
@@ -158,6 +205,23 @@ export class Store {
   addRecentFolder(folder: string): void {
     const recent = [folder, ...this.settings.recentFolders.filter((f) => f !== folder)].slice(0, 12)
     this.saveSettings({ recentFolders: recent })
+  }
+
+  /** Adds a project, or moves an existing one to the top with a fresh time. */
+  addProject(folder: string): AppSettings {
+    const others = this.settings.projects.filter((p) => resolve(p.folder) !== resolve(folder))
+    return this.saveSettings({ projects: [{ folder, addedAt: Date.now() }, ...others] })
+  }
+
+  /** Takes a project off the list. One that has sessions stays, since they are listed under it. */
+  removeProject(folder: string): AppSettings {
+    const dir = resolve(folder)
+    if ([...this.rooms.values()].some((r) => resolve(r.folder) === dir)) throw new Error('This project still has sessions. Delete them first.')
+    return this.saveSettings({ projects: this.settings.projects.filter((p) => resolve(p.folder) !== dir) })
+  }
+
+  projectFolders(): string[] {
+    return this.settings.projects.map((p) => p.folder)
   }
 
   summary(room: Room): RoomSummary {

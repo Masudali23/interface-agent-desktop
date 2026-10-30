@@ -331,6 +331,13 @@ export interface RoomDefaults {
   maxHops: number
 }
 
+/** A folder the user works in. Every session belongs to the project of its folder. */
+export interface Project {
+  folder: string
+  /** When it was added or last chosen for a new session. */
+  addedAt: number
+}
+
 export interface AppSettings {
   claudePath: string
   codexPath: string
@@ -339,6 +346,8 @@ export interface AppSettings {
   theme: 'system' | 'light' | 'dark'
   notifications: boolean
   recentFolders: string[]
+  /** Newest first. Shown in the sidebar under every session type, with or without sessions. */
+  projects: Project[]
 }
 
 export interface FileEntry {

@@ -26,7 +26,7 @@ import { Files } from './files'
 import { filePreviewResponse, pathInsideRoots, resolveFileLink } from './fileLinks'
 import { fileDiff, listFiles, status as gitStatus } from './git'
 import { RoomManager } from './rooms'
-import { Store } from './store'
+import { requireFolder, Store } from './store'
 import { Terminals } from './terminal'
 
 const isMac = process.platform === 'darwin'
@@ -105,7 +105,7 @@ function buildMenu(): void {
       label: 'File',
       submenu: [
         { label: 'New session', accelerator: 'CmdOrCtrl+N', click: () => sendMenu('new-room') },
-        { label: 'Open folder…', accelerator: 'CmdOrCtrl+O', click: () => sendMenu('open-folder') },
+        { label: 'Add project…', accelerator: 'CmdOrCtrl+O', click: () => sendMenu('open-folder') },
         { type: 'separator' },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => sendMenu('settings') },
         { type: 'separator' },
@@ -177,8 +177,9 @@ function createWindow(): BrowserWindow {
 
 // ---------- API ----------
 
+/** Session folders, agent copies and projects the user added: the places the app may open. */
 function insideRoots(path: string): boolean {
-  return pathInsideRoots(path, rooms.roots())
+  return pathInsideRoots(path, [...rooms.roots(), ...store.projectFolders()])
 }
 
 function roomCwd(roomId: string, memberId?: string): { cwd: string; base?: string } {
@@ -219,6 +220,16 @@ const api: IfaceApi = {
     const opts = { properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> }
     const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     return res.canceled || !res.filePaths[0] ? null : res.filePaths[0]
+  },
+  addProject: async (folder) => {
+    const settings = store.addProject(requireFolder(folder))
+    emit({ type: 'settings', settings })
+    return settings
+  },
+  removeProject: async (folder) => {
+    const settings = store.removeProject(folder)
+    emit({ type: 'settings', settings })
+    return settings
   },
 
   createRoom: (input) => rooms.create(input),

@@ -70,6 +70,9 @@ interface State {
   setMode(mode: RoomKind): void
   openNewSession(folder?: string, kind?: RoomKind): void
   closeNewSession(): void
+  /** Asks for a folder, adds it as a project and starts a session in it. */
+  addProject(): Promise<void>
+  removeProject(folder: string): Promise<void>
   setPanel(panel: Panel | null): void
   setPreview(preview: State['preview']): void
   navigatePreview(index: number): void
@@ -198,7 +201,7 @@ export const useApp = create<State>((set, get) => {
       case 'menu': {
         const folder = s.currentRoomId ? s.roomData[s.currentRoomId]?.folder : undefined
         if (e.action === 'new-room') get().openNewSession(folder)
-        if (e.action === 'open-folder') get().openNewSession()
+        if (e.action === 'open-folder') void get().addProject()
         if (e.action === 'settings') get().openSettings()
         if (e.action === 'toggle-sidebar') set({ sidebarOpen: !s.sidebarOpen })
         if (e.action === 'toggle-terminal') set({ terminalOpen: !s.terminalOpen })
@@ -281,6 +284,19 @@ export const useApp = create<State>((set, get) => {
     },
     closeNewSession() {
       set({ newSession: undefined })
+    },
+    async addProject() {
+      const folder = await act(() => window.iface.pickFolder())
+      if (!folder) return
+      const settings = await act(() => window.iface.addProject(folder))
+      if (!settings) return
+      set({ settings })
+      // The project goes first, so its folder is the one just saved, not the picker's spelling.
+      get().openNewSession(settings.projects[0]?.folder ?? folder)
+    },
+    async removeProject(folder) {
+      const settings = await act(() => window.iface.removeProject(folder))
+      if (settings) set({ settings })
     },
     setPanel(panel) {
       ++previewSeq

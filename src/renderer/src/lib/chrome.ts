@@ -1,23 +1,47 @@
 // Pure helpers for the app frame: sidebar grouping, the search palette and shortcuts.
 
-import type { AccountInfo, RoomKind, RoomSummary, UsageLimit } from '@shared/types'
+import type { AccountInfo, Project, RoomKind, RoomSummary, UsageLimit } from '@shared/types'
 
-export interface SessionGroups {
-  pinned: RoomSummary[]
-  folders: Array<{ folder: string; rooms: RoomSummary[] }>
+/** A project in the sidebar with the sessions shown under it. */
+export interface ProjectGroup {
+  folder: string
+  /** Sessions of the chosen type: pinned first, then the most recently updated. */
+  rooms: RoomSummary[]
+  /** Sessions of every type. A project that has any stays listed. */
+  total: number
 }
 
-/** Splits one mode's sessions into the pinned ones and one group per folder. Groups and
- *  the sessions inside them keep the order of `rooms` (most recently updated first). */
-export function groupSessions(rooms: RoomSummary[], mode: RoomKind): SessionGroups {
-  const pinned: RoomSummary[] = []
-  const byFolder = new Map<string, RoomSummary[]>()
-  for (const room of rooms) {
-    if (room.kind !== mode) continue
-    if (room.pinned) pinned.push(room)
-    else byFolder.set(room.folder, [...(byFolder.get(room.folder) ?? []), room])
+const folderKey = (folder: string): string => folder.replace(/[\\/]+$/, '') || folder
+
+/** Every project, whether the user added it or a session works in its folder, each with
+ *  its sessions of `mode` (all sessions when no mode is given). Projects with the latest
+ *  activity come first: their newest session, or the moment they were added if later. */
+export function projectGroups(rooms: RoomSummary[], projects: Project[], mode?: RoomKind): ProjectGroup[] {
+  const groups = new Map<string, ProjectGroup & { at: number }>()
+  const groupOf = (folder: string): ProjectGroup & { at: number } => {
+    const key = folderKey(folder)
+    let group = groups.get(key)
+    if (!group) groups.set(key, (group = { folder, rooms: [], total: 0, at: 0 }))
+    return group
   }
-  return { pinned, folders: [...byFolder].map(([folder, list]) => ({ folder, rooms: list })) }
+  for (const project of projects) {
+    const group = groupOf(project.folder)
+    group.at = Math.max(group.at, project.addedAt)
+  }
+  for (const room of rooms) {
+    const group = groupOf(room.folder)
+    group.total++
+    if (mode && room.kind !== mode) continue
+    group.rooms.push(room)
+    group.at = Math.max(group.at, room.updatedAt)
+  }
+  return [...groups.values()]
+    .sort((a, b) => b.at - a.at)
+    .map(({ folder, rooms: list, total }) => ({
+      folder,
+      total,
+      rooms: list.sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt)
+    }))
 }
 
 /** Reads a saved list of strings (JSON array); anything unreadable counts as empty. */
@@ -35,9 +59,10 @@ export function toggleItem(list: string[], item: string): string[] {
   return list.includes(item) ? list.filter((x) => x !== item) : [...list, item]
 }
 
-/** A collapsed group still shows the open session, so the current place is never hidden. */
+/** A collapsed project still shows its pinned sessions and the open one, so the current
+ *  place is never hidden. */
 export function visibleSessions(rooms: RoomSummary[], collapsed: boolean, activeId?: string): RoomSummary[] {
-  return collapsed ? rooms.filter((r) => r.id === activeId) : rooms
+  return collapsed ? rooms.filter((r) => r.pinned || r.id === activeId) : rooms
 }
 
 /** Sessions whose title or folder contains every word of the query, best matches first:

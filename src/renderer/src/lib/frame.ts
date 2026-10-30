@@ -15,6 +15,13 @@ export function setPinned(roomId: string, pinned: boolean): void {
   void act(() => window.iface.pinRoom(roomId, pinned))
 }
 
+/** Finder reveals a folder where it sits; on Ubuntu the file manager opens the folder itself. */
+export function showFolder(platform: string, folder: string): void {
+  void act(() => (platform === 'darwin' ? window.iface.revealPath(folder) : window.iface.openPath(folder)))
+}
+
+export const showFolderLabel = (platform: string): string => (platform === 'darwin' ? 'Reveal in Finder' : 'Open folder')
+
 function readStored(key: string): string | null {
   try {
     return localStorage.getItem(key)

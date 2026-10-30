@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { PROVIDER_LABEL, type Account, type RoomKind } from '@shared/types'
+import { projectGroups } from '../lib/chrome'
 import { basename } from '../lib/format'
 import { act, useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
@@ -34,7 +35,9 @@ export function NewSessionDialog() {
   const request = useApp((s) => s.newSession)
   const close = useApp((s) => s.closeNewSession)
   const accounts = useApp((s) => s.settings?.accounts ?? EMPTY)
-  const recent = useApp((s) => s.settings?.recentFolders ?? EMPTY)
+  const projects = useApp((s) => s.settings?.projects ?? EMPTY)
+  const rooms = useApp((s) => s.rooms)
+  const recent = useMemo(() => projectGroups(rooms, projects).map((g) => g.folder), [rooms, projects])
   const openRoom = useApp((s) => s.openRoom)
   const openSettings = useApp((s) => s.openSettings)
   const [kind, setKind] = useState<RoomKind>('team')
@@ -111,13 +114,13 @@ export function NewSessionDialog() {
             ))}
           </div>
 
-          <h3>Folder</h3>
+          <h3>Project</h3>
           <div className="folder-pick">
             <div className="folder-current" title={folder}>
               <Icon name="folder" size={14} /> {folder ?? 'No folder chosen'}
             </div>
             <button className="btn" onClick={() => void browse()}>
-              Choose…
+              Other folder…
             </button>
           </div>
           {recent.length > 0 && (

@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
 import type { RoomKind, RoomSummary } from '@shared/types'
-import { groupSessions, shortcut, visibleSessions } from '../lib/chrome'
-import { deleteSession, setPinned, useStoredList } from '../lib/frame'
+import { projectGroups, shortcut, visibleSessions, type ProjectGroup } from '../lib/chrome'
+import { deleteSession, setPinned, showFolder, showFolderLabel, useStoredList } from '../lib/frame'
 import { basename, isBusy } from '../lib/format'
-import { useApp } from '../store'
+import { act, useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
+import { Popover } from './MemberControls'
 import { AccountsUsage } from './Usage'
 
 const MODES: Array<{ id: RoomKind; label: string }> = [
@@ -12,9 +13,6 @@ const MODES: Array<{ id: RoomKind; label: string }> = [
   { id: 'codex', label: 'Codex' },
   { id: 'team', label: 'Team' }
 ]
-
-/** Key of the pinned group in the collapsed list; folders are absolute paths, never this. */
-const PINNED = 'pinned'
 
 function SessionRow({ room, active }: { room: RoomSummary; active: boolean }) {
   const openRoom = useApp((s) => s.openRoom)
@@ -33,10 +31,11 @@ function SessionRow({ room, active }: { room: RoomSummary; active: boolean }) {
             ))}
           </span>
         )}
+        {room.pinned && <Icon name="pin" size={11} className="sb-pinned" />}
         {waiting ? <span className="sb-needs-you" title="Needs you" /> : busy ? <span className="spinner small" title="Working" /> : null}
       </button>
       <span className="sb-session-actions">
-        <button className={`icon-btn ${room.pinned ? 'on' : ''}`} title={room.pinned ? 'Unpin' : 'Pin'} onClick={() => setPinned(room.id, !room.pinned)}>
+        <button className={`icon-btn ${room.pinned ? 'on' : ''}`} title={room.pinned ? 'Unpin' : 'Pin to the top of its project'} onClick={() => setPinned(room.id, !room.pinned)}>
           <Icon name="pin" size={13} />
         </button>
         <button className="icon-btn" title="Delete" onClick={() => deleteSession(room)}>
@@ -47,52 +46,103 @@ function SessionRow({ room, active }: { room: RoomSummary; active: boolean }) {
   )
 }
 
-function SessionGroup({ id, label, title, rooms, collapsed, onToggle, onAdd, current }: {
-  id: string
-  label: string
-  title?: string
-  rooms: RoomSummary[]
+/** Start a session in the project, show its folder, copy its path or take it off the list. */
+function ProjectMenu({ project, onNew }: { project: ProjectGroup; onNew: () => void }) {
+  const platform = useApp((s) => s.platform)
+  const removeProject = useApp((s) => s.removeProject)
+  const name = basename(project.folder)
+  return (
+    <Popover
+      portal
+      button={(open, toggle) => (
+        <button className={`icon-btn sb-group-btn ${open ? 'on' : ''}`} onClick={toggle} title="More" aria-label={`More for ${name}`} aria-haspopup="menu" aria-expanded={open}>
+          <Icon name="dots" size={14} />
+        </button>
+      )}
+    >
+      {(close) => (
+        <div className="model-menu ch-menu" role="menu">
+          <button className="menu-item row" onClick={() => { close(); onNew() }}>
+            <Icon name="plus" size={14} /><span className="mi-label">New session</span>
+          </button>
+          <button className="menu-item row" onClick={() => { close(); showFolder(platform, project.folder) }}>
+            <Icon name="folderOpen" size={14} /><span className="mi-label">{showFolderLabel(platform)}</span>
+          </button>
+          <button className="menu-item row" onClick={() => { close(); void act(() => navigator.clipboard.writeText(project.folder), () => 'Path copied') }}>
+            <Icon name="copy" size={14} /><span className="mi-label">Copy path</span>
+          </button>
+          <div className="ch-menu-sep" />
+          <button
+            className="menu-item row ch-danger"
+            disabled={project.total > 0}
+            title={project.total > 0 ? 'Delete the sessions in this project first' : 'Your files stay where they are'}
+            onClick={() => { close(); void removeProject(project.folder) }}
+          >
+            <Icon name="x" size={14} /><span className="mi-label">Remove project</span>
+          </button>
+        </div>
+      )}
+    </Popover>
+  )
+}
+
+/** A project with the chosen type's sessions under it, like the Claude desktop sidebar. */
+function ProjectSection({ project, mode, collapsed, onToggle, current }: {
+  project: ProjectGroup
+  mode: RoomKind
   collapsed: boolean
-  onToggle: (id: string) => void
-  onAdd?: () => void
+  onToggle: (folder: string) => void
   current?: string
 }) {
-  const shown = visibleSessions(rooms, collapsed, current)
+  const openNewSession = useApp((s) => s.openNewSession)
+  const name = basename(project.folder)
+  const modeLabel = MODES.find((m) => m.id === mode)?.label
+  const shown = visibleSessions(project.rooms, collapsed, current)
+  const startNew = (): void => openNewSession(project.folder, mode)
   return (
     <div className={`sb-group ${collapsed ? 'collapsed' : ''}`}>
       <div className="sb-group-head">
-        <button className="sb-group-toggle" aria-expanded={!collapsed} onClick={() => onToggle(id)} title={title}>
-          <span className="sb-group-name">{label}</span>
+        <button className="sb-group-toggle" aria-expanded={!collapsed} onClick={() => onToggle(project.folder)} title={project.folder}>
+          <span className="sb-group-name">{name}</span>
           <Icon name="caretDown" size={10} className="sb-caret" />
-          {collapsed && <span className="sb-group-count">{rooms.length}</span>}
+          {collapsed && project.rooms.length > 0 && <span className="sb-group-count">{project.rooms.length}</span>}
         </button>
-        {onAdd && (
-          <button className="icon-btn sb-group-add" title={`New session in ${label}`} onClick={onAdd}>
+        <span className="sb-group-actions">
+          <button className="icon-btn sb-group-btn" title={`New ${modeLabel} session in ${name}`} aria-label={`New session in ${name}`} onClick={startNew}>
             <Icon name="plus" size={13} />
           </button>
-        )}
+          <ProjectMenu project={project} onNew={startNew} />
+        </span>
       </div>
       {shown.map((r) => (
         <SessionRow key={r.id} room={r} active={r.id === current} />
       ))}
+      {!collapsed && !project.rooms.length && (
+        <button className="sb-new-in" onClick={startNew} title={`New ${modeLabel} session in ${project.folder}`}>
+          <Icon name="plus" size={13} />
+          <span>New {modeLabel} session</span>
+        </button>
+      )}
     </div>
   )
 }
 
 export function Sidebar() {
   const rooms = useApp((s) => s.rooms)
+  const projects = useApp((s) => s.settings?.projects ?? EMPTY)
   const mode = useApp((s) => s.mode)
   const setMode = useApp((s) => s.setMode)
   const current = useApp((s) => s.currentRoomId)
   const currentFolder = useApp((s) => (s.currentRoomId ? s.roomData[s.currentRoomId]?.folder : undefined))
   const platform = useApp((s) => s.platform)
   const openNewSession = useApp((s) => s.openNewSession)
+  const addProject = useApp((s) => s.addProject)
   const openSettings = useApp((s) => s.openSettings)
   const openRoom = useApp((s) => s.openRoom)
   const setSidebar = useApp((s) => s.setSidebar)
   const setSearchOpen = useApp((s) => s.setSearchOpen)
   const [collapsed, toggle] = useStoredList('iface.collapsedGroups')
-  const groups = useMemo(() => groupSessions(rooms, mode), [rooms, mode])
+  const groups = useMemo(() => projectGroups(rooms, projects, mode), [rooms, projects, mode])
 
   return (
     <nav className="sidebar sb" aria-label="Sessions">
@@ -105,7 +155,7 @@ export function Sidebar() {
         </button>
       </div>
       <div className="sb-nav">
-        <button className="sb-nav-row" onClick={() => openNewSession(currentFolder, mode)}>
+        <button className="sb-nav-row" onClick={() => openNewSession(currentFolder ?? groups[0]?.folder, mode)}>
           <Icon name="plus" size={16} />
           <span>New session</span>
           <kbd>{shortcut(platform, 'N')}</kbd>
@@ -114,6 +164,11 @@ export function Sidebar() {
           <Icon name="search" size={16} />
           <span>Search</span>
           <kbd>{shortcut(platform, 'K')}</kbd>
+        </button>
+        <button className="sb-nav-row" onClick={() => void addProject()}>
+          <Icon name="folderPlus" size={16} />
+          <span>Add project</span>
+          <kbd>{shortcut(platform, 'O')}</kbd>
         </button>
       </div>
       <div className="sb-modes" role="tablist" aria-label="Session type">
@@ -124,26 +179,13 @@ export function Sidebar() {
         ))}
       </div>
       <div className="sb-list">
-        {groups.pinned.length > 0 && (
-          <SessionGroup id={PINNED} label="Pinned" rooms={groups.pinned} collapsed={collapsed.includes(PINNED)} onToggle={toggle} current={current} />
-        )}
-        {groups.folders.map((g) => (
-          <SessionGroup
-            key={g.folder}
-            id={g.folder}
-            label={basename(g.folder)}
-            title={g.folder}
-            rooms={g.rooms}
-            collapsed={collapsed.includes(g.folder)}
-            onToggle={toggle}
-            onAdd={() => openNewSession(g.folder, mode)}
-            current={current}
-          />
+        {groups.map((g) => (
+          <ProjectSection key={g.folder} project={g} mode={mode} collapsed={collapsed.includes(g.folder)} onToggle={toggle} current={current} />
         ))}
-        {!groups.pinned.length && !groups.folders.length && (
+        {!groups.length && (
           <div className="sb-empty">
-            No {MODES.find((m) => m.id === mode)?.label} sessions yet.
-            <button className="sb-empty-start" onClick={() => openNewSession(currentFolder, mode)}>Start one</button>
+            A project is a folder your agents work in. Its sessions are listed under it.
+            <button className="sb-empty-start" onClick={() => void addProject()}>Add project</button>
           </div>
         )}
       </div>

@@ -34,7 +34,7 @@ import { CodexExecAgent } from './agents/codexExec'
 import type { AgentConnector, AgentEvent } from './agents/types'
 import { addWorktree, diffTrees, mergeWorktree, removeWorktree, resetWorktree, restoreTree, snapshot } from './git'
 import { collabDir, formatUpdate, isTeam, parseHandoff, pendingFor, renderMessage, systemPrompt, textOf, titleFrom } from './protocol'
-import type { Store } from './store'
+import { requireFolder, type Store } from './store'
 
 export interface RoomHost {
   emit(e: AppEvent): void
@@ -169,12 +169,14 @@ export class RoomManager {
   }
 
   async create(input: NewRoomInput): Promise<Room> {
+    // A project's folder may have been moved or deleted since it was added.
+    const folder = requireFolder(input.folder)
     const now = Date.now()
     const defaults = this.store.settings.defaults
     const room: Room = {
       id: id('r'),
       title: 'New session',
-      folder: input.folder,
+      folder,
       kind: input.kind,
       createdAt: now,
       updatedAt: now,
@@ -193,7 +195,8 @@ export class RoomManager {
     this.prepareCollab(room)
     this.store.put(room)
     this.store.saveNow(room.id)
-    this.store.addRecentFolder(input.folder)
+    this.store.addRecentFolder(folder)
+    this.store.addProject(folder)
     this.host.emit({ type: 'settings', settings: this.store.settings })
     this.emitRoom(room)
     return room

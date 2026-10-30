@@ -98,6 +98,8 @@ export function topLimit(info?: AccountInfo): UsageLimit | undefined {
 
 interface KeyLike {
   key: string
+  /** The physical key, which stays "KeyK" under non-Latin layouts. */
+  code?: string
   metaKey: boolean
   ctrlKey: boolean
   shiftKey: boolean
@@ -109,7 +111,7 @@ interface KeyLike {
 export function isSearchShortcut(e: KeyLike, platform: string, inTerminal = false): boolean {
   if (inTerminal && platform !== 'darwin') return false
   const mod = platform === 'darwin' ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
-  return mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k'
+  return mod && !e.shiftKey && !e.altKey && (e.key.toLowerCase() === 'k' || e.code === 'KeyK')
 }
 
 /** How a Cmd/Ctrl shortcut is written on this platform, e.g. "⌘K" or "Ctrl+K". */

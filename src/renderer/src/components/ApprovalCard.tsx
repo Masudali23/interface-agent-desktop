@@ -48,8 +48,10 @@ function onShortcut(enabled: boolean, run: () => void) {
 
 /** Text the user is writing somewhere outside the card; the shortcut then stays theirs.
  *  A composer holding attachments (or still saving one) has a message to send even with
- *  no text, so Cmd/Ctrl+Enter there queues or sends it rather than answering the card. */
+ *  no text, so Cmd/Ctrl+Enter there queues or sends it rather than answering the card.
+ *  The terminal and open dialogs keep the key too: their inputs look empty to the page. */
 function typing(el: Element | null): boolean {
+  if (el?.closest('.terminal-panel, .xterm, .modal, [role=dialog]')) return true
   if (el?.closest('.cmp')?.querySelector('.cmp-attachments')) return true
   if (el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.type !== 'checkbox' && el.type !== 'radio')) return el.value.trim() !== ''
   return el instanceof HTMLElement && el.isContentEditable

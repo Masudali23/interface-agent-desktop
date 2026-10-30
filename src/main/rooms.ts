@@ -34,7 +34,7 @@ import { CodexExecAgent } from './agents/codexExec'
 import type { AgentConnector, AgentEvent } from './agents/types'
 import { addWorktree, diffTrees, mergeWorktree, removeWorktree, resetWorktree, restoreTree, snapshot } from './git'
 import { collabDir, formatUpdate, isTeam, parseHandoff, pendingFor, renderMessage, systemPrompt, textOf, titleFrom } from './protocol'
-import { requireFolder, type Store } from './store'
+import { missingFolder, requireFolder, type Store } from './store'
 
 export interface RoomHost {
   emit(e: AppEvent): void
@@ -133,6 +133,8 @@ export class RoomManager {
   }
 
   private prepareCollab(room: Room): void {
+    // Never recreate a project folder that was moved or deleted as an empty one.
+    if (!existsSync(room.folder)) return
     try {
       const root = join(room.folder, '.collab')
       const dir = this.collab(room)
@@ -292,6 +294,7 @@ export class RoomManager {
   async addMember(roomId: string, accountId: string): Promise<void> {
     const room = this.get(roomId)
     if (!room) return
+    if (!existsSync(room.folder)) throw missingFolder(room.folder)
     room.members.push(this.memberFor(room, accountId))
     room.kind = 'team'
     if (room.isolation) await this.createWorktrees(room)
@@ -361,6 +364,8 @@ export class RoomManager {
   send(roomId: string, input: SendInput): Message | undefined {
     const room = this.get(roomId)
     if (!room) return undefined
+    // An agent started in a missing folder would fail, or work in nothing.
+    if (!existsSync(room.folder)) throw missingFolder(room.folder)
     let to = input.to.filter((t) => room.members.some((m) => m.id === t))
     if (!to.length) to = defaultRecipients(room)
     const rt = this.runtime(roomId)

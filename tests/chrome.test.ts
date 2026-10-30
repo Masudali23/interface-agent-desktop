@@ -63,6 +63,15 @@ describe('sidebar projects', () => {
   })
 })
 
+describe('search shortcut keys', () => {
+  it('matches the physical K key under non-Latin keyboard layouts', () => {
+    expect(isSearchShortcut({ ...key('л', { ctrlKey: true }), code: 'KeyK' }, 'linux')).toBe(true)
+    expect(isSearchShortcut({ ...key('κ', { metaKey: true }), code: 'KeyK' }, 'darwin')).toBe(true)
+    expect(isSearchShortcut({ ...key('л', { ctrlKey: true }), code: 'KeyK' }, 'linux', true)).toBe(false)
+    expect(isSearchShortcut({ ...key('л', { ctrlKey: true }), code: 'KeyL' }, 'linux')).toBe(false)
+  })
+})
+
 describe('remembered lists', () => {
   it('reads only a JSON array of strings', () => {
     expect(parseList(null)).toEqual([])

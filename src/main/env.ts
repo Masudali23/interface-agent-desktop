@@ -72,6 +72,9 @@ export function agentEnv(account?: { provider: 'claude' | 'codex'; home?: string
   env.PATH = resolvedPath ?? env.PATH
   // Each extra account keeps its own sign-in, settings and history in its own folder.
   if (account?.home && account.provider === 'claude') env.CLAUDE_CONFIG_DIR = account.home
+  // Claude Code only offers its task list tools (TaskCreate, TaskUpdate) to older models
+  // when it runs without its own terminal UI. Interface shows that list, like Claude desktop.
+  if (account?.provider === 'claude') env.CLAUDE_CODE_ENABLE_TODO_TOOLS = '1'
   if (account?.home && account.provider === 'codex') env.CODEX_HOME = account.home
   return env
 }

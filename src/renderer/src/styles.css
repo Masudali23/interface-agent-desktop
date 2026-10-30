@@ -1392,7 +1392,8 @@ pre {
 }
 .toast {
   position: fixed;
-  bottom: 20px;
+  /* Below the header, never over the message box at the bottom. */
+  top: 54px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;

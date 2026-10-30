@@ -5,7 +5,7 @@ import { RoomManager, type RoomHost } from '../src/main/rooms'
 import type { Store } from '../src/main/store'
 import type { AccountManager } from '../src/main/accounts'
 import type { AgentEvent, TurnInput } from '../src/main/agents/types'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { diffTrees, restoreTree, snapshot } from '../src/main/git'
@@ -1512,6 +1512,21 @@ describe('new sessions', () => {
     const created = await manager.create({ folder: `${folder}/`, kind: 'claude', accountIds: ['acc-a'], isolation: false })
     expect(created).toMatchObject({ folder, kind: 'claude' })
     expect(store.addProject).toHaveBeenCalledWith(folder)
+  })
+
+  it('reports a session folder that was moved or deleted when sending or adding an agent', async () => {
+    const { manager, room, store } = setup({ kind: 'claude', members: [member('a', 'claude')], dispatch: undefined, leadId: undefined })
+    vi.mocked(existsSync).mockImplementation((path) => path !== '/project')
+    try {
+      expect(() => manager.send(room.id, { text: 'Hello', to: ['a'], attachments: [] })).toThrow('/project is missing')
+      expect(room.messages).toEqual([])
+      expect(mocks.connectors).toHaveLength(0)
+      await expect(manager.addMember(room.id, 'acc-a')).rejects.toThrow('/project is missing')
+      expect(room.members).toHaveLength(1)
+      expect(store.saveSoon).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(existsSync).mockImplementation(() => true)
+    }
   })
 
   it('refuses a project folder that was moved or deleted instead of recreating it', async () => {

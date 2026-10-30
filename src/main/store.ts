@@ -48,6 +48,8 @@ function lastActivity(messages: Message[]): number {
   return messages.reduce((latest, m) => m.blocks.reduce((max, b) => Math.max(max, b.at ?? 0), Math.max(latest, m.createdAt, m.sentAt ?? 0)), 0)
 }
 
+export const missingFolder = (dir: string): Error => new Error(`The folder ${dir} is missing. It may have been moved, renamed or deleted.`)
+
 /** The absolute path of a folder chosen for a project or a session. Fails if it is gone. */
 export function requireFolder(folder: string): string {
   const dir = resolve(folder)
@@ -57,7 +59,7 @@ export function requireFolder(folder: string): string {
   } catch {
     // missing or unreadable: reported below
   }
-  if (!found) throw new Error(`The folder ${dir} is missing. It may have been moved, renamed or deleted.`)
+  if (!found) throw missingFolder(dir)
   return dir
 }
 

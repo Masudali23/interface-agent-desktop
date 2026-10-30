@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { McpServer, Member, Room } from '@shared/types'
 import { parentPath, topLimit } from '../lib/chrome'
-import { useStoredList } from '../lib/frame'
+import { showFolder, showFolderLabel, useStoredList } from '../lib/frame'
 import { basename, tokens, untilText } from '../lib/format'
 import { useApp } from '../store'
 import { AgentMark, Icon } from './Icon'
@@ -52,7 +52,7 @@ function Environment({ room }: { room: Room }) {
         <span className="so-main">This computer</span>
         <span className="so-muted">{platform === 'darwin' ? 'macOS' : 'Linux'}</span>
       </div>
-      <button className="so-row so-link" onClick={() => void window.iface.revealPath(room.folder)} title={`${room.folder}\nReveal folder`}>
+      <button className="so-row so-link" onClick={() => showFolder(platform, room.folder)} title={`${room.folder}\n${showFolderLabel(platform)}`}>
         <Icon name="folder" size={15} />
         <span className="so-main">{basename(room.folder)}</span>
         <span className="so-muted so-path"><bdi>{parentPath(room.folder)}</bdi></span>

@@ -317,6 +317,8 @@ export interface AgentInstall {
   path?: string
   version?: string
   detail?: string
+  /** A newer release that the program's own updater (`claude update`, `codex update`) installs. */
+  update?: string
 }
 
 export interface AgentsInfo {
@@ -429,6 +431,7 @@ export type AppEvent =
   | { type: 'account-info'; accountId: string; info: AccountInfo }
   | { type: 'meta'; accountId: string; meta: RuntimeMeta }
   | { type: 'settings'; settings: AppSettings }
+  | { type: 'agents'; agents: AgentsInfo }
   | { type: 'dir-changed'; path: string }
   | { type: 'terminal-data'; id: string; data: string }
   | { type: 'terminal-exit'; id: string; code: number }

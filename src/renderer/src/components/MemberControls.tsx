@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import type { Member, ModelOption, Room } from '@shared/types'
+import { PROVIDER_LABEL, type Member, type ModelOption, type Provider, type Room } from '@shared/types'
 import { CODEX_MODES, effortLabel, PERMISSION_MODES } from '../lib/options'
 import { act, useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
@@ -126,6 +126,21 @@ function update(room: Room, member: Member, patch: Partial<Member['settings']>):
   void act(() => window.iface.updateMember(room.id, member.id, patch))
 }
 
+/** New models come with new program versions, so the update is offered where models are chosen. */
+function ProgramUpdate({ provider }: { provider: Provider }) {
+  const update = useApp((s) => s.agents?.[provider]?.update)
+  const updating = useApp((s) => !!s.updating[provider])
+  const updateProgram = useApp((s) => s.updateProgram)
+  if (!update && !updating) return null
+  const name = PROVIDER_LABEL[provider]
+  return (
+    <button className="menu-item model-update" disabled={updating} onClick={() => void updateProgram(provider)}>
+      <span className="mi-label">{updating ? `Updating ${name}…` : `Update ${name} to ${update}`}</span>
+      <span className="mi-desc">{updating ? 'New models appear here when it finishes' : 'Newer models come with newer versions'}</span>
+    </button>
+  )
+}
+
 /** Model picker, like the one in Claude desktop and the Codex app. */
 export function ModelMenu({ room, member, compact = false, portal = false, align = 'left' }: { room: Room; member: Member; compact?: boolean; portal?: boolean; align?: 'left' | 'right' }) {
   const models = useMemberModels(member)
@@ -174,6 +189,7 @@ export function ModelMenu({ room, member, compact = false, portal = false, align
               </div>
             </>
           )}
+          <ProgramUpdate provider={member.provider} />
         </div>
       )}
     </Popover>

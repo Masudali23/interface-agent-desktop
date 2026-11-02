@@ -85,6 +85,50 @@ afterEach(() => {
   for (const connector of connectors.splice(0)) connector.dispose()
 })
 
+describe('Claude after a Claude Code update', () => {
+  it('starts the next turn on the new program and resumes the session', () => {
+    const { agent } = claude()
+    agent.send(turn)
+    const original = mocks.claude[0]
+    claudeResult(original)
+    agent.programChanged('/new/claude')
+    // Requests to the idle process, like Undo, can still finish.
+    expect(original.end).not.toHaveBeenCalled()
+    agent.send(turn)
+    expect(original.end).toHaveBeenCalledOnce()
+    const next = mocks.claude[1]
+    expect(next.options.binary).toBe('/new/claude')
+    expect(cliValue(next.options.args, '--resume')).toBe('session-1')
+  })
+
+  it('lets a running turn finish first', () => {
+    const { agent } = claude()
+    agent.send(turn)
+    const original = mocks.claude[0]
+    agent.programChanged('/new/claude')
+    expect(original.end).not.toHaveBeenCalled()
+    claudeResult(original)
+    expect(original.end).toHaveBeenCalledOnce()
+    agent.send(turn)
+    expect(mocks.claude[1].options.binary).toBe('/new/claude')
+    expect(mocks.claude).toHaveLength(2)
+  })
+
+  it('keeps the point an edited message continues from', async () => {
+    const { agent } = claude()
+    agent.send(turn)
+    claudeResult(mocks.claude[0])
+    await agent.forkAt({ end: 'assistant-1' })
+    agent.programChanged('/new/claude')
+    agent.send(turn)
+    const next = mocks.claude[1]
+    expect(next.options.binary).toBe('/new/claude')
+    expect(cliValue(next.options.args, '--resume-session-at')).toBe('assistant-1')
+    expect(next.options.args).toContain('--fork-session')
+    expect(mocks.claude).toHaveLength(2)
+  })
+})
+
 describe('Claude delegated settings', () => {
   it('resumes the same session for one overridden turn and restores saved settings for a synchronous next send', () => {
     const { agent, options } = claude(Object.freeze(baseSettings()))

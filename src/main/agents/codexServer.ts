@@ -12,6 +12,8 @@ export interface ThreadHandler {
   notify(method: string, params: Json): void
   request(id: number | string, method: string, params: Json): void
   closed(): void
+  /** A turn is running in this thread. */
+  busy(): boolean
 }
 
 export class CodexServer extends EventEmitter {
@@ -20,10 +22,13 @@ export class CodexServer extends EventEmitter {
   private nextId = 1
   private pending = new Map<number, { resolve: (v: Json) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>()
   private threads = new Map<string, ThreadHandler>()
+  private restartPending = false
+  private holdRestart?: () => boolean
   stderrTail = ''
 
   constructor(
-    private binary: string,
+    /** Read at every start, so a restart picks up a newly installed or chosen Codex. */
+    private binary: () => string,
     private env: () => NodeJS.ProcessEnv,
     private version: string
   ) {
@@ -36,7 +41,10 @@ export class CodexServer extends EventEmitter {
 
   start(): Promise<void> {
     if (this.ready && this.running) return this.ready
-    const proc = spawn(this.binary, ['app-server'], { env: this.env(), stdio: ['pipe', 'pipe', 'pipe'] })
+    // Started again before the planned restart: this start is on the new version.
+    const restarted = this.restartPending
+    this.restartPending = false
+    const proc = spawn(this.binary(), ['app-server'], { env: this.env(), stdio: ['pipe', 'pipe', 'pipe'] })
     this.proc = proc
     this.stderrTail = ''
     proc.stdout.on('data', lineReader((line) => this.onLine(line)))
@@ -59,14 +67,22 @@ export class CodexServer extends EventEmitter {
       for (const t of this.threads.values()) t.closed()
       this.threads.clear()
       this.emit('exit')
+      // Stopped on its own before the planned restart: the next start uses the new version.
+      if (this.restartPending) {
+        this.restartPending = false
+        this.emit('restarted')
+      }
     })
     this.ready = this.call('initialize', {
       clientInfo: { name: 'interface', title: 'Interface', version: this.version },
       capabilities: null
     }).then(() => this.notify('initialized', {}))
-    this.ready.catch(() => {
-      this.ready = undefined
-    })
+    this.ready.then(
+      () => restarted && this.emit('restarted'),
+      () => {
+        this.ready = undefined
+      }
+    )
     return this.ready
   }
 
@@ -127,6 +143,7 @@ export class CodexServer extends EventEmitter {
       clearTimeout(p.timer)
       if (msg.error) p.reject(new Error(String(msg.error.message ?? 'Codex request failed')))
       else p.resolve(msg.result ?? {})
+      this.scheduleRestart()
       return
     }
     const params: Json = msg.params ?? {}
@@ -140,9 +157,40 @@ export class CodexServer extends EventEmitter {
     }
     if (handler) handler.notify(msg.method, params)
     else this.emit('notification', msg.method, params)
+    this.scheduleRestart()
+  }
+
+  /**
+   * Codex was updated or replaced while this process runs. Restarts on the new version as
+   * soon as no turn, request or sign-in (`hold`) needs this process; idle conversations pick
+   * up their threads again on their next message. Emits `restarted` once it has stopped.
+   */
+  restartWhenIdle(hold?: () => boolean): void {
+    if (!this.running) return
+    this.restartPending = true
+    this.holdRestart = hold
+    this.scheduleRestart()
+  }
+
+  private scheduleRestart(): void {
+    if (!this.restartPending) return
+    // Checked later, so whoever just got an answer has sent its next request by then.
+    setTimeout(() => {
+      const proc = this.proc
+      if (!this.restartPending || !proc || !this.running) return
+      if (this.pending.size || this.holdRestart?.() || [...this.threads.values()].some((t) => t.busy())) return
+      this.restartPending = false
+      this.proc = undefined
+      this.ready = undefined
+      for (const t of this.threads.values()) t.closed()
+      this.threads.clear()
+      proc.kill('SIGTERM')
+      this.emit('restarted')
+    }, 0)
   }
 
   dispose(): void {
+    this.restartPending = false
     this.proc?.kill('SIGTERM')
     this.proc = undefined
     this.ready = undefined

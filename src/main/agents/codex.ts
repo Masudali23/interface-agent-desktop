@@ -80,7 +80,8 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
     this.handler = {
       notify: (method, params) => this.onNotification(method, params),
       request: (id, method, params) => this.onRequest(id, method, params),
-      closed: () => this.onServerClosed()
+      closed: () => this.onServerClosed(),
+      busy: () => this.turnActive
     }
   }
 

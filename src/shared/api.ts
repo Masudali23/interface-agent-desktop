@@ -28,6 +28,8 @@ import type {
 export interface IfaceApi {
   getState(): Promise<InitialState>
   checkAgents(): Promise<AgentsInfo>
+  /** Runs `claude update` or `codex update`, then moves the agents to the new version. */
+  updateAgent(provider: Provider): Promise<{ agents: AgentsInfo; message: string }>
   pickFolder(): Promise<string | null>
   /** Adds a folder as a project, or moves an existing one to the top. */
   addProject(folder: string): Promise<AppSettings>
@@ -111,6 +113,7 @@ export interface Bridge extends IfaceApi {
 export const API_METHODS: Array<keyof IfaceApi> = [
   'getState',
   'checkAgents',
+  'updateAgent',
   'pickFolder',
   'addProject',
   'removeProject',

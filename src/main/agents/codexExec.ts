@@ -63,6 +63,11 @@ export class CodexExecAgent extends EventEmitter implements AgentConnector {
     this.opts = { ...this.opts, settings }
   }
 
+  /** Each turn runs `codex exec`, so the next turn simply uses the new program. */
+  programChanged(binary: string): void {
+    this.opts = { ...this.opts, binary }
+  }
+
   async forkAt(): Promise<void> {
     // exec mode cannot fork a thread: start a new one.
     if (this.turnActive) throw new Error('Wait for GPT to finish first.')

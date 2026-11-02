@@ -20,6 +20,7 @@ interface MockConnector extends EventEmitter {
   answer: Mock
   forkAt: Mock
   undoFiles: Mock
+  programChanged: Mock
   dispose: Mock
   report(event: AgentEvent): void
 }
@@ -42,6 +43,7 @@ vi.mock('../src/main/agents/claude', async () => {
       undoFiles = vi.fn(async () => 'Connector undo')
       refreshContext = vi.fn(async () => {})
       mcpList = vi.fn(async () => [])
+      programChanged = vi.fn()
       answer = vi.fn()
       dispose = vi.fn(() => this.removeAllListeners())
 
@@ -248,6 +250,21 @@ describe('RoomManager turn lifecycle', () => {
     await settle()
     expect(mocks.connectors).toHaveLength(2)
     expect(mocks.connectors[1].send.mock.calls[0][0].text).toContain("It's your turn, @claude.")
+  })
+})
+
+describe('RoomManager program updates', () => {
+  it('tells only the agents of the updated program to use it from their next turn', async () => {
+    const { manager, send } = setup()
+    send('Both of you', ['a', 'b'])
+    await settle()
+    const claude = mocks.connectors.find((c) => 'binary' in c.options)!
+    const codex = mocks.connectors.find((c) => !('binary' in c.options))!
+    manager.programChanged('claude', '/new/claude')
+    expect(claude.programChanged).toHaveBeenCalledWith('/new/claude')
+    expect(codex.programChanged).not.toHaveBeenCalled()
+    expect(claude.dispose).not.toHaveBeenCalled()
+    expect(mocks.connectors).toHaveLength(2)
   })
 })
 

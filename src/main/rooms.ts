@@ -686,6 +686,20 @@ export class RoomManager {
     return c
   }
 
+  /**
+   * Claude Code or Codex was updated or replaced: every agent of that program uses the one at
+   * `binary` from its next turn on, continuing its session. (Codex app-server agents move with
+   * their account's server instead.)
+   */
+  programChanged(provider: Provider, binary: string): void {
+    for (const [roomId, rt] of this.runtimes) {
+      const room = this.get(roomId)
+      for (const [memberId, c] of rt.connectors) {
+        if (room?.members.find((m) => m.id === memberId)?.provider === provider) c.programChanged?.(binary)
+      }
+    }
+  }
+
   private startTurn(room: Room, memberId: string, job: Job): void {
     const rt = this.runtime(room.id)
     const member = room.members.find((m) => m.id === memberId)

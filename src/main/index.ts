@@ -17,8 +17,9 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import type { IfaceApi } from '@shared/api'
 import { parseMentions } from '@shared/mentions'
-import type { AgentsInfo, AppEvent, Attachment, InitialState } from '@shared/types'
+import { PROVIDER_LABEL, type AgentInstall, type AgentsInfo, type AppEvent, type Attachment, type InitialState, type Provider } from '@shared/types'
 import { AccountManager } from './accounts'
+import { isNewer, latestRelease, updateResult, versionNumber } from './cliUpdate'
 import { chatClipboardMarkdown, chatShareFile, prepareChatExport, saveChatMarkdown, saveChatZip } from './chatExport'
 import { chatExportFilename } from './exportMarkdown'
 import { findBinary, initShellPath, run } from './env'
@@ -44,6 +45,15 @@ let rooms: RoomManager
 let files: Files
 let terminals: Terminals
 let agents: AgentsInfo = { claude: { found: false }, codex: { found: false } }
+let agentsCheckedAt = 0
+/** Where and which version each program was last found, to notice updates and replacements. */
+const known: Partial<Record<Provider, { path: string; version?: string }>> = {}
+/** The newest release of each program, looked up online. */
+const releases: Partial<Record<Provider, string>> = {}
+/** A release the program's installer did not offer yet when asked (Homebrew can trail npm). */
+const unavailable: Partial<Record<Provider, string>> = {}
+let releasesCheckedAt = 0
+const updating = new Set<Provider>()
 let codexAppServer = false
 let quitConfirmed = false
 const shareMenus = new Set<ShareMenu>()
@@ -69,7 +79,15 @@ function notify(title: string, body: string, roomId?: string): void {
 
 // ---------- agent programs ----------
 
+function withUpdate(provider: Provider, install: AgentInstall): AgentInstall {
+  const current = versionNumber(install.version)
+  const latest = releases[provider]
+  return { ...install, update: current && latest && isNewer(latest, current) && unavailable[provider] !== latest ? latest : undefined }
+}
+
 async function detectAgents(): Promise<AgentsInfo> {
+  const first = !agentsCheckedAt
+  agentsCheckedAt = Date.now()
   const claudePath = findBinary('claude', store.settings.claudePath)
   const codexPath = findBinary('codex', store.settings.codexPath)
   const [cv, xv, xa] = await Promise.all([
@@ -79,15 +97,51 @@ async function detectAgents(): Promise<AgentsInfo> {
   ])
   codexAppServer = !!xa && xa.code === 0 && /app.server|Usage/i.test(xa.out)
   agents = {
-    claude: { found: !!claudePath, path: claudePath, version: cv?.out.trim().split('\n')[0] },
-    codex: {
+    claude: withUpdate('claude', { found: !!claudePath, path: claudePath, version: cv?.out.trim().split('\n')[0] }),
+    codex: withUpdate('codex', {
       found: !!codexPath,
       path: codexPath,
       version: xv?.out.trim().split('\n')[0],
       detail: codexPath ? (codexAppServer ? 'app-server' : 'exec fallback (update Codex for approvals)') : undefined
-    }
+    })
   }
+  for (const p of ['claude', 'codex'] as const) {
+    const path = agents[p].path
+    if (!path) continue
+    const was = known[p]
+    const version = agents[p].version ?? was?.version
+    known[p] = { path, version }
+    // Updated, replaced or installed while Interface runs (here or in a terminal): use it.
+    if (first || (was?.path === path && was.version === version)) continue
+    accounts.programChanged(p)
+    rooms.programChanged(p, path)
+  }
+  emit({ type: 'agents', agents })
   return agents
+}
+
+/** Looks up the newest Claude Code and Codex releases: every few hours, for a newly found program, or when asked. */
+async function checkReleases(force = false): Promise<void> {
+  const due = force || Date.now() - releasesCheckedAt > 6 * 60 * 60 * 1000
+  const wanted = (['claude', 'codex'] as const).filter((p) => agents[p].found && (due || !(p in releases)))
+  if (!wanted.length) return
+  if (due) releasesCheckedAt = Date.now()
+  const fetchJson = async (url: string): Promise<unknown> => {
+    const res = await net.fetch(url, { signal: AbortSignal.timeout(15000) })
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    return res.json()
+  }
+  await Promise.all(
+    wanted.map(async (p) => {
+      try {
+        releases[p] = await latestRelease(p, fetchJson)
+      } catch {
+        // Offline: keep the last answer.
+      }
+    })
+  )
+  agents = { claude: withUpdate('claude', agents.claude), codex: withUpdate('codex', agents.codex) }
+  emit({ type: 'agents', agents })
 }
 
 const binaries = (): { claude?: string; codex?: string } => ({ claude: agents.claude.path, codex: agents.codex.path })
@@ -212,9 +266,32 @@ const api: IfaceApi = {
     meta: Object.fromEntries(accounts.meta)
   }),
   checkAgents: async () => {
-    const info = await detectAgents()
+    for (const p of Object.keys(unavailable) as Provider[]) delete unavailable[p]
+    await detectAgents()
+    await checkReleases(true)
     accounts.refreshAll()
-    return info
+    return agents
+  },
+  updateAgent: async (provider) => {
+    const bin = agents[provider].path
+    if (!bin) throw new Error(`${PROVIDER_LABEL[provider]} wasn't found.`)
+    if (updating.has(provider)) throw new Error(`${PROVIDER_LABEL[provider]} is already updating.`)
+    updating.add(provider)
+    try {
+      const before = versionNumber(agents[provider].version)
+      const res = await run(bin, ['update'], { timeout: 10 * 60 * 1000 })
+      await detectAgents()
+      const result = updateResult(provider, res, before, versionNumber(agents[provider].version), releases[provider])
+      if (result.notOffered) {
+        // Offer it again once there is a newer release, after a restart or on Check again.
+        unavailable[provider] = releases[provider]
+        agents = { ...agents, [provider]: withUpdate(provider, agents[provider]) }
+        emit({ type: 'agents', agents })
+      } else if (!result.ok) throw new Error(result.message)
+      return { agents, message: result.message }
+    } finally {
+      updating.delete(provider)
+    }
   },
   pickFolder: async () => {
     const opts = { properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> }
@@ -549,11 +626,17 @@ void app.whenReady().then(async () => {
   win = createWindow()
   win.webContents.once('did-finish-load', () => {
     accounts.refreshAll()
+    void checkReleases(true)
     if (process.env.INTERFACE_E2E) void runE2E(process.env.INTERFACE_E2E)
   })
 
   app.on('activate', () => {
     if (!BrowserWindow.getAllWindows().length) win = createWindow()
+  })
+  // Notice a Claude Code or Codex update made in a terminal, and look for new releases.
+  app.on('browser-window-focus', () => {
+    if (Date.now() - agentsCheckedAt < 60 * 1000 || updating.size) return
+    void detectAgents().then(() => checkReleases())
   })
 })
 

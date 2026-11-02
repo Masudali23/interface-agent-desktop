@@ -62,6 +62,8 @@ export class AccountManager {
   private claudeLogins = new Map<string, ChildProcessWithoutNullStreams>()
   private codexLogins = new Map<string, string>()
   private refreshing = new Map<string, Promise<void>>()
+  /** Accounts to refresh again once the running refresh ends, which may have read an old version. */
+  private refreshAgain = new Set<string>()
   private timer?: NodeJS.Timeout
 
   constructor(
@@ -243,10 +245,16 @@ export class AccountManager {
     return this.meta.get(id)?.models.find((m) => m.isDefault && m.id)?.id
   }
 
-  refresh(id: string): Promise<void> {
+  refresh(id: string, again = false): Promise<void> {
     const existing = this.refreshing.get(id)
-    if (existing) return existing
-    const p = this.doRefresh(id).finally(() => this.refreshing.delete(id))
+    if (existing) {
+      if (again) this.refreshAgain.add(id)
+      return existing
+    }
+    const p = this.doRefresh(id).finally(() => {
+      this.refreshing.delete(id)
+      if (this.refreshAgain.delete(id)) void this.refresh(id)
+    })
     this.refreshing.set(id, p)
     return p
   }
@@ -319,11 +327,24 @@ export class AccountManager {
     if (!account || !bin) return undefined
     let server = this.servers.get(id)
     if (!server) {
-      server = new CodexServer(bin, () => this.env(account), this.host.version)
+      server = new CodexServer(() => this.host.binaries().codex ?? bin, () => this.env(account), this.host.version)
       server.on('notification', (method: string, params: Json) => this.onCodexNotification(id, method, params))
+      // Now on a newly installed Codex: load the models it offers.
+      server.on('restarted', () => void this.refresh(id, true))
       this.servers.set(id, server)
     }
     return server
+  }
+
+  /** Claude Code or Codex was updated or replaced: reload each account's models from the new version. */
+  programChanged(provider: Provider): void {
+    for (const account of this.list()) {
+      if (account.provider !== provider) continue
+      const server = provider === 'codex' ? this.servers.get(account.id) : undefined
+      // A running Codex keeps the old version until it restarts, which waits for turns and sign-ins.
+      if (server?.running) server.restartWhenIdle(() => this.codexLogins.has(account.id))
+      else void this.refresh(account.id, true)
+    }
   }
 
   private onCodexNotification(id: string, method: string, params: Json): void {

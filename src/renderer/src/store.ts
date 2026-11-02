@@ -6,6 +6,7 @@ import type {
   AppEvent,
   AppSettings,
   Message,
+  Provider,
   Room,
   RoomKind,
   RoomSummary,
@@ -64,6 +65,8 @@ interface State {
   searchQuery: string
   searchHits: SearchHit[]
   focusMessageId?: string
+  /** Claude Code or Codex is installing a new version. */
+  updating: Partial<Record<Provider, boolean>>
 
   init(): Promise<void>
   openRoom(id: string | undefined, messageId?: string): Promise<void>
@@ -88,6 +91,8 @@ interface State {
   setNotice(notice: string | undefined): void
   setSearchOpen(open: boolean): void
   search(query: string): Promise<void>
+  /** Runs the program's own updater; its new models load once its agents are idle. */
+  updateProgram(provider: Provider): Promise<void>
 }
 
 const LAST_ROOM = 'iface.lastRoom'
@@ -186,6 +191,9 @@ export const useApp = create<State>((set, get) => {
       case 'settings':
         set({ settings: e.settings })
         return
+      case 'agents':
+        set({ agents: e.agents })
+        return
       case 'dir-changed':
         set({ dirVersion: { ...s.dirVersion, [e.path]: (s.dirVersion[e.path] ?? 0) + 1 } })
         return
@@ -233,6 +241,7 @@ export const useApp = create<State>((set, get) => {
     searchOpen: false,
     searchQuery: '',
     searchHits: [],
+    updating: {},
 
     async init() {
       window.iface.onEvent(onEvent)
@@ -385,6 +394,21 @@ export const useApp = create<State>((set, get) => {
       }
       const hits = await window.iface.search(query)
       if (seq === searchSeq) set({ searchHits: hits })
+    },
+    async updateProgram(provider) {
+      if (get().updating[provider]) return
+      set({ updating: { ...get().updating, [provider]: true } })
+      try {
+        await act(
+          () => window.iface.updateAgent(provider),
+          (r) => {
+            set({ agents: r.agents })
+            return r.message
+          }
+        )
+      } finally {
+        set({ updating: { ...get().updating, [provider]: false } })
+      }
     }
   }
 })

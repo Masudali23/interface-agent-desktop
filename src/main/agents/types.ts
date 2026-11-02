@@ -81,6 +81,8 @@ export interface AgentConnector {
   mcpList(): Promise<McpServer[]>
   mcpToggle?(name: string, enabled: boolean): Promise<void>
   mcpReconnect?(name: string): Promise<void>
+  /** The program was updated or replaced: use the one at `binary` from the next turn on. */
+  programChanged?(binary: string): void
   dispose(): void
   on(event: 'event', listener: (e: AgentEvent) => void): this
 }

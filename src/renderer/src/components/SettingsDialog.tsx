@@ -253,6 +253,8 @@ function DefaultsFor({ provider, value, onChange }: { provider: Provider; value:
 
 function ProgramRow({ provider, path, onSave }: { provider: Provider; path: string; onSave: (v: string) => void }) {
   const info = useApp((s) => s.agents?.[provider])
+  const updating = useApp((s) => !!s.updating[provider])
+  const updateProgram = useApp((s) => s.updateProgram)
   const [value, setValue] = useState(path)
   useEffect(() => setValue(path), [path])
   return (
@@ -261,6 +263,11 @@ function ProgramRow({ provider, path, onSave }: { provider: Provider; path: stri
         <AgentMark provider={provider} color={provider === 'claude' ? '#c96442' : '#0f8f6f'} size={20} />
         <b>{PROVIDER_LABEL[provider]}</b>
         <span className={`tag ${info?.found ? 'ok' : 'bad'}`}>{info?.found ? 'Found' : 'Not found'}</span>
+        {(info?.update || updating) && (
+          <button className="btn tiny primary setting-agent-update" disabled={updating} onClick={() => void updateProgram(provider)}>
+            {updating ? 'Updating…' : `Update to ${info?.update}`}
+          </button>
+        )}
       </div>
       <div className="setting-agent-detail">
         {info?.version && <span>{info.version}</span>}
@@ -346,7 +353,8 @@ export function SettingsDialog() {
             <>
               <p className="hint">
                 The app runs the official <code>claude</code> and <code>codex</code> programs, signed in with your own plans. No API keys are used, and
-                API key variables are removed from their environment so nothing is billed per use.
+                API key variables are removed from their environment so nothing is billed per use. New models arrive with new versions of these
+                programs, so the app offers each update here and in the model menu.
               </p>
               <ProgramRow provider="claude" path={settings.claudePath} onSave={(v) => void save({ claudePath: v })} />
               <ProgramRow provider="codex" path={settings.codexPath} onSave={(v) => void save({ codexPath: v })} />

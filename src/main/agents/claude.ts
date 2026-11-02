@@ -88,6 +88,8 @@ export class ClaudeAgent extends EventEmitter implements AgentConnector {
   private turnStartSeen = false
   private resumeAt?: string
   private forkNext = false
+  /** Claude Code was updated since this process started. */
+  private outdated = false
   private launchedBypass = false
   /** Messages written into the running turn that Claude Code has not picked up yet. */
   private unreadSteers = 0
@@ -211,7 +213,9 @@ export class ClaudeAgent extends EventEmitter implements AgentConnector {
     const overridden = settings.model !== saved.model || settings.effort !== saved.effort
     // Launch-only effort values need a new process. Resume the same conversation,
     // then retire this process when the delegated turn ends to restore current prefs.
-    if (overridden) this.stopProcess()
+    // A new Claude Code version also needs a new process; both resume the same session.
+    if (overridden || this.outdated) this.stopProcess()
+    this.outdated = false
     this.restartAfterTurn = overridden
     const proc = this.ensureProcess(settings)
     this.turnActive = true
@@ -296,6 +300,16 @@ export class ClaudeAgent extends EventEmitter implements AgentConnector {
       if (this.turnActive) this.restartAfterTurn = true
       else this.stopProcess()
     }
+  }
+
+  /**
+   * Claude Code was updated or replaced. The process is replaced when the next turn starts
+   * (or when the running one ends), so requests to an idle process, like Undo, still finish.
+   */
+  programChanged(binary: string): void {
+    this.opts = { ...this.opts, binary }
+    if (this.turnActive) this.restartAfterTurn = true
+    else this.outdated = !!this.proc
   }
 
   async forkAt(ref: { start?: string; end?: string } | undefined): Promise<void> {

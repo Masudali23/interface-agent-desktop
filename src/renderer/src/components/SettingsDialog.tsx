@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ACCOUNT_COLORS, PROVIDER_LABEL, type Account, type AppSettings, type MemberSettings, type Provider } from '@shared/types'
+import { useFocusHandoff } from '../lib/focus'
 import { ago } from '../lib/format'
 import { CODEX_MODES, effortLabel, PERMISSION_MODES } from '../lib/options'
 import { act, useApp, type SettingsTab, EMPTY } from '../store'
@@ -251,10 +252,27 @@ function DefaultsFor({ provider, value, onChange }: { provider: Provider; value:
   )
 }
 
+/** Runs the program's own updater. It stays focusable while that runs, for keyboard users. */
+function UpdateButton({ provider, version, updating }: { provider: Provider; version?: string; updating: boolean }) {
+  const updateProgram = useApp((s) => s.updateProgram)
+  const ref = useRef<HTMLButtonElement>(null)
+  useFocusHandoff(ref, '.setting-agent', ['input'])
+  return (
+    <button
+      ref={ref}
+      className="btn tiny primary setting-agent-update"
+      aria-disabled={updating}
+      onClick={() => {
+        if (!updating) void updateProgram(provider)
+      }}
+    >
+      {updating ? 'Updating…' : `Update to ${version}`}
+    </button>
+  )
+}
+
 function ProgramRow({ provider, path, onSave }: { provider: Provider; path: string; onSave: (v: string) => void }) {
   const info = useApp((s) => s.agents?.[provider])
-  const updating = useApp((s) => !!s.updating[provider])
-  const updateProgram = useApp((s) => s.updateProgram)
   const [value, setValue] = useState(path)
   useEffect(() => setValue(path), [path])
   return (
@@ -263,11 +281,7 @@ function ProgramRow({ provider, path, onSave }: { provider: Provider; path: stri
         <AgentMark provider={provider} color={provider === 'claude' ? '#c96442' : '#0f8f6f'} size={20} />
         <b>{PROVIDER_LABEL[provider]}</b>
         <span className={`tag ${info?.found ? 'ok' : 'bad'}`}>{info?.found ? 'Found' : 'Not found'}</span>
-        {(info?.update || updating) && (
-          <button className="btn tiny primary setting-agent-update" disabled={updating} onClick={() => void updateProgram(provider)}>
-            {updating ? 'Updating…' : `Update to ${info?.update}`}
-          </button>
-        )}
+        {(info?.update || info?.updating) && <UpdateButton provider={provider} version={info.update} updating={!!info.updating} />}
       </div>
       <div className="setting-agent-detail">
         {info?.version && <span>{info.version}</span>}

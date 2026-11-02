@@ -319,6 +319,8 @@ export interface AgentInstall {
   detail?: string
   /** A newer release that the program's own updater (`claude update`, `codex update`) installs. */
   update?: string
+  /** That updater is running. */
+  updating?: boolean
 }
 
 export interface AgentsInfo {

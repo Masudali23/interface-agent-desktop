@@ -65,8 +65,6 @@ interface State {
   searchQuery: string
   searchHits: SearchHit[]
   focusMessageId?: string
-  /** Claude Code or Codex is installing a new version. */
-  updating: Partial<Record<Provider, boolean>>
 
   init(): Promise<void>
   openRoom(id: string | undefined, messageId?: string): Promise<void>
@@ -124,6 +122,8 @@ function upsert(messages: Message[], message: Message): Message[] {
 
 let searchSeq = 0
 let previewSeq = 0
+/** Updates asked for whose `updating` state has not arrived from the main process yet. */
+const updatesStarting = new Set<Provider>()
 
 export const useApp = create<State>((set, get) => {
   const onEvent = (e: AppEvent): void => {
@@ -241,7 +241,6 @@ export const useApp = create<State>((set, get) => {
     searchOpen: false,
     searchQuery: '',
     searchHits: [],
-    updating: {},
 
     async init() {
       window.iface.onEvent(onEvent)
@@ -396,8 +395,11 @@ export const useApp = create<State>((set, get) => {
       if (seq === searchSeq) set({ searchHits: hits })
     },
     async updateProgram(provider) {
-      if (get().updating[provider]) return
-      set({ updating: { ...get().updating, [provider]: true } })
+      // The main process reports `updating` in agents, so it survives a reload of this window.
+      if (updatesStarting.has(provider) || get().agents?.[provider]?.updating) return
+      updatesStarting.add(provider)
+      // Its result would otherwise hide behind an earlier error.
+      get().setError(undefined)
       try {
         await act(
           () => window.iface.updateAgent(provider),
@@ -407,7 +409,7 @@ export const useApp = create<State>((set, get) => {
           }
         )
       } finally {
-        set({ updating: { ...get().updating, [provider]: false } })
+        updatesStarting.delete(provider)
       }
     }
   }

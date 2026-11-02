@@ -19,7 +19,7 @@ import type { IfaceApi } from '@shared/api'
 import { parseMentions } from '@shared/mentions'
 import { PROVIDER_LABEL, type AgentInstall, type AgentsInfo, type AppEvent, type Attachment, type InitialState, type Provider } from '@shared/types'
 import { AccountManager } from './accounts'
-import { isNewer, latestRelease, updateResult, versionNumber } from './cliUpdate'
+import { claudeChannel, isNewer, latestRelease, updateResult, versionNumber } from './cliUpdate'
 import { chatClipboardMarkdown, chatShareFile, prepareChatExport, saveChatMarkdown, saveChatZip } from './chatExport'
 import { chatExportFilename } from './exportMarkdown'
 import { findBinary, initShellPath, run } from './env'
@@ -82,7 +82,15 @@ function notify(title: string, body: string, roomId?: string): void {
 function withUpdate(provider: Provider, install: AgentInstall): AgentInstall {
   const current = versionNumber(install.version)
   const latest = releases[provider]
-  return { ...install, update: current && latest && isNewer(latest, current) && unavailable[provider] !== latest ? latest : undefined }
+  // A build from source reports 0.0.0 and has no release to update to.
+  const offer = current && !current.startsWith('0.0.0') && latest && isNewer(latest, current) && unavailable[provider] !== latest
+  return { ...install, update: offer ? latest : undefined, updating: updating.has(provider) || undefined }
+}
+
+/** Recomputes the update offers and tells the window. */
+function showAgents(): void {
+  agents = { claude: withUpdate('claude', agents.claude), codex: withUpdate('codex', agents.codex) }
+  emit({ type: 'agents', agents })
 }
 
 async function detectAgents(): Promise<AgentsInfo> {
@@ -134,14 +142,13 @@ async function checkReleases(force = false): Promise<void> {
   await Promise.all(
     wanted.map(async (p) => {
       try {
-        releases[p] = await latestRelease(p, fetchJson)
+        releases[p] = await latestRelease(p, fetchJson, p === 'claude' ? claudeChannel(agents.claude.path) : 'latest')
       } catch {
         // Offline: keep the last answer.
       }
     })
   )
-  agents = { claude: withUpdate('claude', agents.claude), codex: withUpdate('codex', agents.codex) }
-  emit({ type: 'agents', agents })
+  showAgents()
 }
 
 const binaries = (): { claude?: string; codex?: string } => ({ claude: agents.claude.path, codex: agents.codex.path })
@@ -277,21 +284,21 @@ const api: IfaceApi = {
     if (!bin) throw new Error(`${PROVIDER_LABEL[provider]} wasn't found.`)
     if (updating.has(provider)) throw new Error(`${PROVIDER_LABEL[provider]} is already updating.`)
     updating.add(provider)
+    showAgents()
+    let result: ReturnType<typeof updateResult>
     try {
       const before = versionNumber(agents[provider].version)
       const res = await run(bin, ['update'], { timeout: 10 * 60 * 1000 })
       await detectAgents()
-      const result = updateResult(provider, res, before, versionNumber(agents[provider].version), releases[provider])
-      if (result.notOffered) {
-        // Offer it again once there is a newer release, after a restart or on Check again.
-        unavailable[provider] = releases[provider]
-        agents = { ...agents, [provider]: withUpdate(provider, agents[provider]) }
-        emit({ type: 'agents', agents })
-      } else if (!result.ok) throw new Error(result.message)
-      return { agents, message: result.message }
+      result = updateResult(provider, res, before, versionNumber(agents[provider].version), releases[provider])
+      // Offer it again once there is a newer release, after a restart or on Check again.
+      if (result.notOffered) unavailable[provider] = releases[provider]
     } finally {
       updating.delete(provider)
+      showAgents()
     }
+    if (!result.ok) throw new Error(result.message)
+    return { agents, message: result.message }
   },
   pickFolder: async () => {
     const opts = { properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> }
@@ -633,10 +640,17 @@ void app.whenReady().then(async () => {
   app.on('activate', () => {
     if (!BrowserWindow.getAllWindows().length) win = createWindow()
   })
-  // Notice a Claude Code or Codex update made in a terminal, and look for new releases.
+  // Notice a Claude Code or Codex update made in a terminal, and look for new releases:
+  // at most once a minute, so a focus soon after the last check is handled when the minute ends.
+  let focusCheck: NodeJS.Timeout | undefined
   app.on('browser-window-focus', () => {
-    if (Date.now() - agentsCheckedAt < 60 * 1000 || updating.size) return
-    void detectAgents().then(() => checkReleases())
+    clearTimeout(focusCheck)
+    focusCheck = setTimeout(
+      () => {
+        if (!updating.size) void detectAgents().then(() => checkReleases())
+      },
+      Math.max(0, agentsCheckedAt + 60 * 1000 - Date.now())
+    )
   })
 })
 

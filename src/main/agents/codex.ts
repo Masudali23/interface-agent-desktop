@@ -58,6 +58,8 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
   private loaded = false
   private turnId?: string
   private turnActive = false
+  /** /compact returns at once while Codex keeps compacting; its app-server must not restart until it is done. */
+  private compactingUntil = 0
   private stopping = false
   private stopTimer?: NodeJS.Timeout
   private lastError = ''
@@ -81,7 +83,7 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
       notify: (method, params) => this.onNotification(method, params),
       request: (id, method, params) => this.onRequest(id, method, params),
       closed: () => this.onServerClosed(),
-      busy: () => this.turnActive
+      busy: () => this.turnActive || Date.now() < this.compactingUntil
     }
   }
 
@@ -245,6 +247,7 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
         const threadId = await this.ensureThread()
         if (name === 'compact') {
           await this.opts.server.call('thread/compact/start', { threadId })
+          this.compactingUntil = Date.now() + 5 * 60 * 1000
           const id = `codex-compact-${Date.now()}`
           this.emitEvent({ t: 'tool-start', id, name: 'Compact', input: {} })
           this.emitEvent({ t: 'tool-end', id, output: 'Codex is compacting the conversation' })
@@ -455,6 +458,8 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
         return
       }
       case 'turn/completed': {
+        // Also ends a compaction, including one that failed.
+        this.compactingUntil = 0
         const turn = p.turn ?? {}
         if (this.plan) this.emitEvent({ t: 'tool-end', id: this.plan.id })
         this.plan = undefined
@@ -473,6 +478,7 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
         else this.lastError = p.error?.message ?? 'Codex error'
         return
       case 'thread/compacted': {
+        this.compactingUntil = 0
         const id = `codex-compact-${Date.now()}`
         this.emitEvent({ t: 'tool-start', id, name: 'Compact', input: {} })
         this.emitEvent({ t: 'tool-end', id, output: 'Conversation compacted' })
@@ -558,7 +564,10 @@ export class CodexAgent extends EventEmitter implements AgentConnector {
         return
       case 'contextCompaction':
         this.startTool(id, 'Compact', {}, first)
-        if (done) this.emitEvent({ t: 'tool-end', id, output: 'Conversation compacted' })
+        if (done) {
+          this.compactingUntil = 0
+          this.emitEvent({ t: 'tool-end', id, output: 'Conversation compacted' })
+        }
         return
     }
   }

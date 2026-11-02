@@ -264,7 +264,8 @@ pre {
 .btn:hover {
   background: var(--surface-2);
 }
-.btn:disabled {
+.btn:disabled,
+.btn[aria-disabled='true'] {
   opacity: 0.5;
   cursor: default;
 }
@@ -1904,8 +1905,11 @@ pre {
 .model-update .mi-label {
   color: var(--accent);
 }
-.model-update:disabled {
+.model-update[aria-disabled='true'] {
   cursor: default;
+}
+.model-update[aria-disabled='true'] .mi-label {
+  color: var(--text-2);
 }
 .effort-row {
   display: flex;

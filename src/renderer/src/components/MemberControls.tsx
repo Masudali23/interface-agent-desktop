@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { PROVIDER_LABEL, type Member, type ModelOption, type Provider, type Room } from '@shared/types'
+import { useFocusHandoff } from '../lib/focus'
 import { CODEX_MODES, effortLabel, PERMISSION_MODES } from '../lib/options'
 import { act, useApp, EMPTY } from '../store'
 import { AgentMark, Icon } from './Icon'
@@ -128,15 +129,29 @@ function update(room: Room, member: Member, patch: Partial<Member['settings']>):
 
 /** New models come with new program versions, so the update is offered where models are chosen. */
 function ProgramUpdate({ provider }: { provider: Provider }) {
-  const update = useApp((s) => s.agents?.[provider]?.update)
-  const updating = useApp((s) => !!s.updating[provider])
+  const info = useApp((s) => s.agents?.[provider])
+  return info?.update || info?.updating ? <ProgramUpdateRow provider={provider} version={info.update} updating={!!info.updating} /> : null
+}
+
+function ProgramUpdateRow({ provider, version, updating }: { provider: Provider; version?: string; updating: boolean }) {
   const updateProgram = useApp((s) => s.updateProgram)
-  if (!update && !updating) return null
+  const ref = useRef<HTMLButtonElement>(null)
+  // Once the update is done this row goes away: keep keyboard focus on the chosen model.
+  useFocusHandoff(ref, '.model-menu', ['.menu-item.on', '.menu-item'])
   const name = PROVIDER_LABEL[provider]
+  // Codex reconnects on the new version once no Codex turn is running.
+  const when = provider === 'codex' ? 'New models load once no Codex turn is running' : 'New models load when it finishes'
   return (
-    <button className="menu-item model-update" disabled={updating} onClick={() => void updateProgram(provider)}>
-      <span className="mi-label">{updating ? `Updating ${name}…` : `Update ${name} to ${update}`}</span>
-      <span className="mi-desc">{updating ? 'New models appear here when it finishes' : 'Newer models come with newer versions'}</span>
+    <button
+      ref={ref}
+      className="menu-item model-update"
+      aria-disabled={updating}
+      onClick={() => {
+        if (!updating) void updateProgram(provider)
+      }}
+    >
+      <span className="mi-label">{updating ? `Updating ${name}…` : `Update ${name} to ${version}`}</span>
+      <span className="mi-desc">{updating ? when : 'Newer models come with newer versions'}</span>
     </button>
   )
 }

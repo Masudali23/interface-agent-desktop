@@ -272,6 +272,44 @@ function codex(settings = baseSettings()) {
   return { ...result, options, server, starts, complete }
 }
 
+describe('Codex /compact and app-server restarts', () => {
+  it('holds a restart until Codex reports the conversation compacted', async () => {
+    const { agent, events, server } = codex()
+    expect(agent.command?.('compact', '')).toBe(true)
+    await vi.waitFor(() => expect(events.some((e) => e.t === 'turn-end')).toBe(true))
+    const handler = server.subscribe.mock.calls[0][1] as ThreadHandler
+    expect(agent.busy).toBe(false)
+    expect(handler.busy()).toBe(true)
+    handler.notify('thread/compacted', { threadId: 'thread-1' })
+    expect(handler.busy()).toBe(false)
+  })
+
+  it('releases it when the compaction turn ends, even when it failed', async () => {
+    const { agent, events, server } = codex()
+    agent.command?.('compact', '')
+    await vi.waitFor(() => expect(events.some((e) => e.t === 'turn-end')).toBe(true))
+    const handler = server.subscribe.mock.calls[0][1] as ThreadHandler
+    expect(handler.busy()).toBe(true)
+    handler.notify('turn/completed', { threadId: 'thread-1', turn: { id: 'compact-turn', status: 'failed' } })
+    expect(handler.busy()).toBe(false)
+  })
+
+  it('stops holding it after five minutes without word from Codex', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const { agent, events, server } = codex()
+      agent.command?.('compact', '')
+      await vi.waitFor(() => expect(events.some((e) => e.t === 'turn-end')).toBe(true))
+      const handler = server.subscribe.mock.calls[0][1] as ThreadHandler
+      expect(handler.busy()).toBe(true)
+      vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1)
+      expect(handler.busy()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('Codex app-server delegated settings', () => {
   it('overrides only turn/start and sends the latest saved settings on the following turn', async () => {
     const { agent, options, server, starts, complete } = codex(Object.freeze(baseSettings()))
